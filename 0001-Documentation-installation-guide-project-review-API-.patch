@@ -1,0 +1,1880 @@
+From 2c1497986c838800c62b836af1f285c2b49ea73f Mon Sep 17 00:00:00 2001
+From: AI Architect Agent <dev@example.com>
+Date: Tue, 6 Oct 2026 09:51:04 +0000
+Subject: [PATCH] Documentation: installation guide, project review, API
+ documentation, architecture and security, verified against the code
+
+---
+ API_DOCUMENTATION.md       | 573 +++++++++++++++++++++++++++++++++++++
+ ARCHITECTURE.md            | 308 ++++++++++++++++++++
+ INSTRUCTION.md             | 379 ++++++++++++++++++++++++
+ PROJECT_REVIEW.md          | 253 ++++++++++++++++
+ README.md                  |  15 +-
+ SECURITY.md                | 266 +++++++++++++++++
+ backend/tests/test_docs.py |   3 +-
+ 7 files changed, 1794 insertions(+), 3 deletions(-)
+ create mode 100644 API_DOCUMENTATION.md
+ create mode 100644 ARCHITECTURE.md
+ create mode 100644 INSTRUCTION.md
+ create mode 100644 PROJECT_REVIEW.md
+ create mode 100644 SECURITY.md
+
+diff --git a/API_DOCUMENTATION.md b/API_DOCUMENTATION.md
+new file mode 100644
+index 0000000..fe63cb7
+--- /dev/null
++++ b/API_DOCUMENTATION.md
+@@ -0,0 +1,573 @@
++# AI Architect Agent - API Documentation
++
++This document describes every endpoint of the backend API as implemented. For installation see [Installation Guide](INSTRUCTION.md); for how the parts fit together see [Architecture](ARCHITECTURE.md); for security implications see [Security](SECURITY.md).
++
++The running backend also publishes an interactive OpenAPI description at `/api/docs` (Swagger UI) and the raw schema at `/api/openapi.json`; those are generated from the same code and are authoritative if this document and the code ever disagree.
++
++---
++
++## 1. API Overview
++
++| Aspect | Value |
++| --- | --- |
++| Framework | FastAPI, with Pydantic v2 models for every request and response |
++| Format | JSON in and out, except the `.blend` and `.png` downloads |
++| Prefix | Every route starts with `/api` |
++| Request IDs | Every response carries an `X-Request-ID` header; send your own (letters and digits, up to 64 characters) to correlate logs |
++| Body size limit | 1 MB by default (`MAX_REQUEST_BYTES`); larger bodies get `413 request_too_large` |
++| Style | Each step of the pipeline is a separate, synchronous request: interpret, plan, build, render. There are no background jobs or status-polling endpoints |
++
++## 2. Base URL
++
++| Situation | Base URL |
++| --- | --- |
++| Backend directly (development) | `http://127.0.0.1:8000` |
++| Through the Vite development server | `http://localhost:5173` (it forwards `/api/*` to the backend) |
++
++## 3. Authentication
++
++**The backend API does not implement authentication.** Any client that can reach it can call every endpoint. It is designed to run on your own machine, bound to `127.0.0.1`. See [Security](SECURITY.md#13-api-security) before exposing it anywhere else.
++
++This is separate from **Anthropic authentication**: the backend authenticates to Anthropic with `ANTHROPIC_API_KEY` from `.env`. Clients never send, receive or need that key.
++
++## 4. Endpoint Summary
++
++| Method | Endpoint | Purpose |
++| --- | --- | --- |
++| `GET` | `/api/health` | Backend status, version, Claude key and verification state, Blender detection |
++| `GET` | `/api/health/claude` | Prove Anthropic accepts requests (cached for 10 minutes) |
++| `GET` | `/api/specifications/schema` | JSON Schema of `BuildingSpecification` |
++| `POST` | `/api/specifications/validate` | Validate a specification; returns the report, safe fixes and a summary |
++| `GET` | `/api/examples` | List the example briefs |
++| `GET` | `/api/examples/{example_id}` | One example brief and its specification |
++| `POST` | `/api/designs/interpret` | Brief -> design intent (calls Claude) |
++| `POST` | `/api/designs/plan` | Design intent -> specification, report and floor plans |
++| `POST` | `/api/designs/build` | Specification -> Blender build job |
++| `GET` | `/api/designs/jobs/{job_id}/building.blend` | Download a built model |
++| `POST` | `/api/designs/jobs/{job_id}/renders` | Render one image of a built model |
++| `GET` | `/api/designs/jobs/{job_id}/renders/{render_id}.png` | Download a render |
++| `POST` | `/api/designs/modify` | Apply a plain-English change to a design (calls Claude) |
++| `GET` | `/api/projects` | List saved projects |
++| `POST` | `/api/projects` | Save a new project |
++| `GET` | `/api/projects/{project_id}` | Open a saved project |
++| `PUT` | `/api/projects/{project_id}` | Save a project again |
++| `DELETE` | `/api/projects/{project_id}` | Delete a saved project |
++
++## 5. Endpoint Documentation
++
++### GET /api/health
++
++**Purpose.** Report that the API is up and how it is configured. It never calls Anthropic and never returns the key.
++
++**Response 200**
++
++```json
++{
++  "status": "ok",
++  "service": "AI Architect Agent",
++  "version": "1.0.0rc1",
++  "environment": "development",
++  "timestamp": "2026-10-06T09:00:00Z",
++  "checks": {
++    "anthropic": {
++      "configured": true,
++      "model": "claude-sonnet-5-5",
++      "verification": { "status": "not_checked", "structured_outputs": "not_checked", "code": null, "message": null, "checked_at": null }
++    },
++    "blender": { "status": "found", "detail": "Blender executable found." }
++  }
++}
++```
++
++`checks.blender.status` is `found`, `not_configured` or `missing`. `verification` repeats the last result of `GET /api/health/claude` while it is less than 10 minutes old.
++
++### GET /api/health/claude
++
++**Purpose.** Show whether Anthropic actually accepts requests: a tiny text request (key, credit, model, network) followed by a tiny structured-output request. Costs a fraction of a cent.
++
++**Query parameters**
++
++| Name | Type | Default | Description |
++| --- | --- | --- | --- |
++| `refresh` | boolean | `false` | Check again even if a result less than 10 minutes old exists |
++
++**Response 200**
++
++```json
++{ "status": "verified", "structured_outputs": "ok", "code": null, "message": null, "checked_at": "2026-10-06T09:00:00Z" }
++```
++
++A failed check is still `200`, with `status: "failed"`, the error `code` (for example `CLAUDE_BILLING_ERROR`) and a safe `message`.
++
++**Errors:** `503 anthropic_key_missing`.
++
++### GET /api/specifications/schema
++
++**Purpose.** The JSON Schema of `BuildingSpecification`, for tools that produce or check specifications. **Response 200:** a JSON Schema document.
++
++### POST /api/specifications/validate
++
++**Purpose.** Validate any specification without building it.
++
++**Request body:** a `BuildingSpecification` as JSON (see [section 10](#10-architectural-specification-schema)). Malformed specifications are not rejected with `422`; they come back as validation issues.
++
++**Response 200**
++
++| Field | Type | Description |
++| --- | --- | --- |
++| `report` | ValidationReport | `status` (`PASS`, `WARNING`, `ERROR`), counts, `issues`, `fixes` |
++| `specification` | BuildingSpecification or null | The specification after safe automatic fixes, if it could be parsed |
++| `summary` | SpecificationSummary or null | Floors, size, rooms, roof and so on |
++
++### GET /api/examples
++
++**Purpose.** List the example briefs in `examples/`. **Response 200:** `[{"id": "british-family-house", "title": "...", "prompt": "..."}, ...]`
++
++### GET /api/examples/{example_id}
++
++**Path parameters:** `example_id`, a lowercase slug such as `scandinavian-house`.
++
++**Response 200:** `{"id", "title", "prompt", "specification"}`.
++
++**Errors:** `400 invalid_example_id` (not a plain slug), `404 example_not_found`, `500 example_unreadable`.
++
++### POST /api/designs/interpret
++
++**Purpose.** Stage 1: Claude turns a brief into a validated design intent. Described in detail in [section 6](#6-generation-api).
++
++### POST /api/designs/plan
++
++**Purpose.** Stages 2 to 4: the deterministic planner turns a design intent into a `BuildingSpecification` and SVG floor plans. Does not call Claude.
++
++### POST /api/designs/build
++
++**Purpose.** Stages 5 to 9: Blender builds the specification. Requires `BLENDER_EXECUTABLE`.
++
++### GET /api/designs/jobs/{job_id}/building.blend
++
++**Purpose.** Download the model a build produced.
++
++**Path parameters:** `job_id`, 32 lowercase hexadecimal characters.
++
++**Response 200:** the `.blend` file (`application/x-blender`). **Errors:** `404 job_not_found`.
++
++### POST /api/designs/jobs/{job_id}/renders
++
++**Purpose.** Stage 10: render one image of a built model.
++
++### GET /api/designs/jobs/{job_id}/renders/{render_id}.png
++
++**Purpose.** Download a render. Both IDs are 32 lowercase hexadecimal characters.
++
++**Response 200:** `image/png`. **Errors:** `404 render_not_found`. This endpoint does not need Blender to be configured.
++
++### POST /api/designs/modify
++
++**Purpose.** Apply a plain-English change to an existing design. Described in [section 6](#6-generation-api).
++
++### Project endpoints
++
++Described in [section 7](#7-project-api).
++
++## 6. Generation API
++
++A complete generation is four requests. The client keeps the state between them: the intent from step 1, the specification from step 2 and the job ID from step 3.
++
++```mermaid
++sequenceDiagram
++    participant C as Client
++    participant B as Backend
++    participant A as Anthropic
++    participant BL as Blender
++    C->>B: POST /api/designs/interpret {prompt, constraints}
++    B->>A: structured-output request
++    A-->>B: design intent (JSON)
++    B-->>C: intent + report
++    C->>B: POST /api/designs/plan {intent}
++    B-->>C: specification + report + summary + SVG plans
++    C->>B: POST /api/designs/build {specification}
++    B->>BL: subprocess: runner.py with scene.json
++    BL-->>B: building.blend + result.json
++    B-->>C: job_id + blend_url + cameras
++    C->>B: POST /api/designs/jobs/{job_id}/renders {camera, ...}
++    B->>BL: subprocess: render_runner.py
++    BL-->>B: PNG
++    B-->>C: render_id + image_url
++```
++
++### Interpret: POST /api/designs/interpret
++
++**Request body**
++
++| Field | Type | Required | Description |
++| --- | --- | --- | --- |
++| `prompt` | string | Yes | The brief, 10 to 4,000 characters |
++| `constraints` | DesignConstraints | No | Advanced options; each one overrides the brief |
++
++`DesignConstraints` (every field optional): `building_type`, `style`, `floors` (1 to 10), `width`, `depth`, `height`, `bedrooms`, `bathrooms`, `garage`, `roof`, `detail_level`.
++
++**Response 200: InterpretationResult**
++
++| Field | Type | Description |
++| --- | --- | --- |
++| `intent` | DesignIntent | The validated design intent ([section 9](#9-data-models)) |
++| `report` | ValidationReport | Checks on the intent |
++| `constraints_applied` | list of strings | Which advanced options overrode Claude |
++| `attempts` | integer | Claude calls used: 1, or 2 if a correction was needed |
++| `model` | string | The model that replied |
++| `usage` | object | `input_tokens`, `output_tokens`, `cache_read_input_tokens` |
++| `completed_stages` | list of strings | `["understanding_request"]` |
++
++**Errors:** `503 anthropic_key_missing`; every `CLAUDE_*` code ([section 11](#11-error-responses)); `422 not_a_building_request`, `422 design_request_refused`, `422 design_interpretation_failed` (Claude's reply failed validation twice; `issues` lists why), `502 claude_response_truncated`.
++
++### Plan: POST /api/designs/plan
++
++**Request body:** `{"intent": DesignIntent}`.
++
++**Response 200: PlanResponse**
++
++| Field | Type | Description |
++| --- | --- | --- |
++| `specification` | BuildingSpecification | The planned building |
++| `report` | ValidationReport | Validation of the planned building |
++| `summary` | SpecificationSummary | Floors, footprint, areas, bedrooms, bathrooms, garage, roof |
++| `notes` | list of strings | How the plan differs from the intent, and why |
++| `plans` | list of `{level, name, svg}` | One SVG floor plan per floor |
++| `completed_stages` | list of strings | `["creating_specification", "validating_design", "planning_rooms"]` |
++
++**Errors:** `422 planning_failed` (with the reason), `422 building_validation_failed`.
++
++### Build: POST /api/designs/build
++
++**Request body:** `{"specification": BuildingSpecification}`. The specification is validated again; one with errors is refused.
++
++**Response 200: BuildResponse**
++
++| Field | Type | Description |
++| --- | --- | --- |
++| `job_id` | string | 32 hexadecimal characters; names the job folder |
++| `blend_url` | string | `/api/designs/jobs/{job_id}/building.blend` |
++| `cameras` | list of `{name, role}` | Every camera created, for example `Camera_Exterior_Front` / `exterior_front` |
++| `blender_version` | string | The Blender that built it |
++| `object_count` | integer | Objects built |
++| `duration_seconds` | number | Build time inside Blender |
++| `completed_stages` | list of strings | `preparing_scene`, `applying_materials`, `generating_geometry`, `creating_lighting`, `creating_cameras` |
++
++**Errors:** `503 blender_unavailable`, `502 blender_build_failed`, `504 blender_timeout`, `422 building_validation_failed`.
++
++### Render: POST /api/designs/jobs/{job_id}/renders
++
++**Request body: RenderRequest** (every field optional)
++
++| Field | Values | Default |
++| --- | --- | --- |
++| `camera` | Any name from the build's `cameras` | `Camera_Exterior_Front` |
++| `preset` | `day`, `evening` | `day` |
++| `quality` | `preview` (16 samples, half size), `standard` (64), `high` (256 Cycles / 128 EEVEE) | `preview` |
++| `resolution` | `1280x720`, `1920x1080`, `2560x1440` | `1280x720` |
++| `engine` | `auto`, `eevee`, `cycles`, or omitted for `RENDER_DEFAULT_ENGINE` | server default |
++
++**Response 200: RenderResponse:** `render_id`, `image_url`, `camera`, `role`, `preset`, `quality`, `engine` (the engine actually used), `width`, `height`, `duration_seconds`, `note` (why Cycles was used when `auto` did not pick EEVEE), `completed_stages: ["rendering"]`.
++
++**Errors:** `404 job_not_found`, `422 unknown_camera` (with the list of `cameras`), `503 blender_unavailable`, `502 render_failed`, `504 render_timeout`, `422 invalid_request` for values outside the lists above.
++
++### Modify: POST /api/designs/modify
++
++**Request body: ModifyRequest**
++
++| Field | Type | Required | Description |
++| --- | --- | --- | --- |
++| `request` | string | Yes | The change, 3 to 1,000 characters |
++| `intent` | DesignIntent | Yes | The current design intent |
++| `overrides` | list of `{op, params}` | No | Finishing changes made so far (returned by previous calls) |
++| `specification` | BuildingSpecification | Yes | The current specification |
++
++**Response 200: ModifyResponse:** the new `intent`, `overrides`, `specification`, `report`, `summary` and `plans`, plus `change_summary` (Claude's), `changes` (computed by comparing the specifications, for example `"Roof: gable 35° slate -> hip 35° slate."`), `assumptions`, `notes`, `attempts` and `model`.
++
++**Errors:** `503 anthropic_key_missing`, every `CLAUDE_*` code, `422 not_a_modification`, `422 modification_refused`, `422 modification_failed` (with `problems`).
++
++## 7. Project API
++
++Projects are JSON files under `output/projects/` (see [Architecture](ARCHITECTURE.md#15-project-storage)). There is no database.
++
++### GET /api/projects
++
++**Response 200:** newest first.
++
++| Field | Type | Description |
++| --- | --- | --- |
++| `id` | string | 32 hexadecimal characters |
++| `name` | string | Project name |
++| `version` | integer | Increases with every save |
++| `updated_at` | datetime | Last save |
++| `floors`, `bedrooms`, `changes` | integer | Summary and number of changes |
++| `thumbnail_url` | string or null | The most recent render that still exists |
++
++### POST /api/projects
++
++**Request body: ProjectData**
++
++| Field | Type | Required | Description |
++| --- | --- | --- | --- |
++| `name` | string | Yes | 1 to 120 characters |
++| `brief` | string | Yes | The original brief, up to 4,000 characters |
++| `constraints` | DesignConstraints | No | Advanced options used |
++| `interpretation` | InterpretationResult | Yes | From `/interpret` |
++| `intent` | DesignIntent | Yes | The current intent |
++| `overrides` | list | No | Finishing changes |
++| `specification` | BuildingSpecification | Yes | The current specification |
++| `notes` | list of strings | No | Planner notes |
++| `history` | list of `{request, summary, changes, assumptions}` | No | Changes made |
++| `build` | `{job_id, blender_version, object_count, cameras}` or null | No | The latest build |
++| `renders` | list of `{render_id, job_id, camera, preset, quality, engine, width, height, note}` | No | Its renders |
++
++Unknown fields are rejected with `422`. The client never sends paths, URLs or a validation report: the server derives every path and URL from the IDs and stores its own validation of the specification.
++
++**Response 201:** the stored project (below).
++
++### GET /api/projects/{project_id}
++
++**Response 200:** the stored project: everything above plus `id`, `version`, `created_at`, `updated_at`, `schema_version`, the server's `report`, `build` and `renders` with `blend_url`/`image_url`, repository-relative paths and `available` (whether the file still exists), and the derived `summary` and `plans`.
++
++**Errors:** `404 project_not_found` (also for IDs that are not 32 hexadecimal characters), `500 project_unreadable` (damaged file).
++
++### PUT /api/projects/{project_id}
++
++**Request body:** `ProjectData` plus `version`, the version you opened. **Response 200:** the stored project with `version` increased by one.
++
++**Errors:** `409 project_changed` (saved elsewhere since; `current_version` says which), `404 project_not_found`.
++
++### DELETE /api/projects/{project_id}
++
++**Response 204** with no body. The project file is deleted; its build and render files in `output/jobs/` are kept. **Errors:** `404 project_not_found`.
++
++## 8. Health/System API
++
++| Question | Where |
++| --- | --- |
++| Is the backend up, which version, which environment? | `GET /api/health`: `status`, `version`, `environment` |
++| Is a Claude key configured, which model? | `GET /api/health`: `checks.anthropic.configured`, `.model` |
++| Does Anthropic accept requests and structured output? | `GET /api/health/claude` |
++| Is Blender found? | `GET /api/health`: `checks.blender` (checks the path only; it does not start Blender) |
++
++## 9. Data Models
++
++### DesignIntent (Claude's output)
++
++| Field | Type | Description |
++| --- | --- | --- |
++| `understood` | boolean | `false` if the brief is not a building request |
++| `project_name`, `summary` | string | Name and one-paragraph summary |
++| `building_type`, `style` | string | For example `detached_house`, `contemporary` |
++| `floors` | integer | 1 to 10 |
++| `floor_height` | number | Floor-to-floor height in metres |
++| `footprint_width`, `footprint_depth` | number | Target footprint in metres |
++| `entrance_room` | string | ID of the room with the front door |
++| `rooms` | list of IntentRoom | ID, name, type, floor, target area, glazing, preferred side |
++| `connections` | list | Which rooms connect, by door or opening |
++| `stairs` | list | Stair start and arrival rooms |
++| `roof` | object | Type (`flat`, `gable`, `hip`, `shed`), pitch, material |
++| `exterior` | object | Wall, accent and window-frame materials |
++| `site` | object | Driveway, paths, patio, planting, balcony rooms |
++| `assumptions` | list of strings | What Claude assumed |
++
++### ValidationReport
++
++| Field | Type | Description |
++| --- | --- | --- |
++| `status` | string | `PASS`, `WARNING` or `ERROR` |
++| `error_count`, `warning_count` | integer | Counts |
++| `issues` | list | `severity`, `code`, `message`, `element_ids`, `location` |
++| `fixes` | list | Safe automatic fixes applied: `code`, `message`, `element_ids` |
++
++## 10. Architectural Specification Schema
++
++`BuildingSpecification` (schema version `1.0`) is the single source of truth for a building. Units are metres; the origin is the front-left corner at ground level, X along the front, Y towards the rear, Z up. The full schema is served by `GET /api/specifications/schema`; the fields are documented in [docs/building-specification.md](docs/building-specification.md).
++
++| Field | Required | Contents |
++| --- | --- | --- |
++| `schema_version` | No (default `1.0`) | Version of the format |
++| `project` | Yes | Name and description |
++| `building` | Yes | Type, style, footprint, wall and slab thicknesses, foundation height |
++| `floors` | Yes | Level, name, elevation and height of each floor |
++| `rooms` | Yes | ID, name, type (19 types), floor, position, size, finishes |
++| `doors`, `windows` | No | Openings on room edges, with type or style, size and position |
++| `stairs` | No | Position, direction, risers, rise and run |
++| `balconies` | No | Room, wall, offset, width and depth |
++| `roof` | Yes | Type, pitch, overhang, material, ridge direction |
++| `exterior` | Yes | Wall, accent, trim, window-frame and door materials |
++| `environment` | No | Ground, driveway, paths, patio, vegetation, sun |
++
++## 11. Error Responses
++
++Every error uses the same envelope. Extra fields depend on the error.
++
++```json
++{
++  "error": {
++    "code": "CLAUDE_BILLING_ERROR",
++    "message": "Your Anthropic account has no API credit. Add credit at console.anthropic.com (Settings, Billing). A Claude.ai subscription does not include API credit.",
++    "request_id": "6f1c0e2b9d8a4f3e8b7a6c5d4e3f2a1b",
++    "reason": "Your credit balance is too low to access the Anthropic API.",
++    "anthropic_status": 400,
++    "anthropic_type": "invalid_request_error"
++  }
++}
++```
++
++`reason`, `anthropic_status`, `anthropic_type` and `anthropic_request_id` are included only when `APP_ENV` is not `production`.
++
++| Error code | HTTP | Meaning | Recommended action |
++| --- | --- | --- | --- |
++| `invalid_request` | 422 | The body or parameters failed validation; `fields` lists each problem | Correct the request |
++| `request_too_large` | 413 | Body larger than `MAX_REQUEST_BYTES` | Send less data |
++| `not_found`, `http_error` | 404 / other | Unknown route or generic HTTP error | Check the URL |
++| `internal_error` | 500 | Unexpected server error; details are in the server log | Report with the `request_id` |
++| `anthropic_key_missing` | 503 | No `ANTHROPIC_API_KEY` | Add it to `.env`; restart |
++| `CLAUDE_AUTH_ERROR` | 502 | Key rejected | Replace the key |
++| `CLAUDE_PERMISSION_ERROR` | 502 | Key may not use the model | Check workspace permissions |
++| `CLAUDE_MODEL_ERROR` | 502 | Model unavailable | Correct `ANTHROPIC_MODEL` |
++| `CLAUDE_BILLING_ERROR` | 402 | No API credit | Add credit |
++| `CLAUDE_SCHEMA_ERROR` | 502 | Structured-output schema rejected | The app falls back to JSON-only replies; report it |
++| `CLAUDE_RATE_LIMIT` | 429 | Rate limit reached | Retry shortly |
++| `CLAUDE_CONNECTION_ERROR` | 503 | Anthropic unreachable | Check the network |
++| `CLAUDE_UNAVAILABLE` | 503 | Anthropic overloaded or failing | Retry shortly |
++| `CLAUDE_BAD_REQUEST` | 502 | Other rejection | See `reason`; run `scripts/check_claude.py` |
++| `claude_response_truncated` | 502 | Reply hit the token limit | Shorter brief, or raise `ANTHROPIC_MAX_TOKENS` |
++| `not_a_building_request`, `design_request_refused` | 422 | Not a building, or refused | Rephrase |
++| `design_interpretation_failed` | 422 | Reply invalid after the correction attempt; `issues` explains | Rephrase more concretely |
++| `planning_failed`, `building_validation_failed` | 422 | The design cannot be laid out or validated | Adjust the brief or options |
++| `not_a_modification`, `modification_refused`, `modification_failed` | 422 | Change not understood, refused or impossible; `problems` explains | Rephrase the change |
++| `blender_unavailable` | 503 | `BLENDER_EXECUTABLE` not usable | Fix the path |
++| `blender_build_failed`, `render_failed` | 502 | Blender failed | See the job's log files |
++| `blender_timeout`, `render_timeout` | 504 | Took too long | Lower quality, or raise the timeout |
++| `job_not_found`, `render_not_found` | 404 | Unknown or invalid ID | Check the ID |
++| `unknown_camera` | 422 | No such camera in this build | Use a name from `cameras` |
++| `project_not_found` | 404 | Unknown or invalid project ID | Check the ID |
++| `project_changed` | 409 | Saved elsewhere since you opened it | Reopen, then save |
++| `project_unreadable` | 500 | Damaged project file | Inspect `output/projects/<id>.json` |
++| `invalid_example_id`, `example_not_found`, `example_unreadable` | 400 / 404 / 500 | Example lookup failures | Use an ID from `GET /api/examples` |
++
++## 12. HTTP Status Codes
++
++| Status | Used for |
++| --- | --- |
++| 200 | Success |
++| 201 | Project created |
++| 204 | Project deleted |
++| 400 | Invalid example ID |
++| 402 | No Anthropic API credit |
++| 404 | Unknown route, job, render, project or example |
++| 409 | Project saved elsewhere since it was opened |
++| 413 | Request body too large |
++| 422 | Invalid request, or a design that cannot be interpreted, planned, validated or changed |
++| 429 | Anthropic rate limit |
++| 500 | Unexpected error, or a damaged stored file |
++| 502 | Anthropic or Blender failed |
++| 503 | Claude key missing, Anthropic unreachable or Blender not configured |
++| 504 | Build or render timed out |
++
++## 13. Anthropic Integration
++
++All Anthropic traffic goes through one class, `AnthropicStructuredClient` in `backend/app/services/claude_service.py`, using the official Python SDK with the key from settings. Interpretation and modification use **structured outputs** (`output_config.format` with a JSON Schema generated from the Pydantic models), so replies are constrained to the schema; the backend then validates them with Pydantic and the validation engine, and sends problems back to Claude once for correction. Errors are classified into the `CLAUDE_*` codes above. Details are in [Architecture](ARCHITECTURE.md#5-claude-service-architecture).
++
++## 14. Blender Integration
++
++`POST /api/designs/build` compiles the specification into `scene.json` (named boxes, meshes, materials, collections, cameras, lights: data only) and starts Blender as a subprocess with an argument list (no shell), running `blender/scripts/runner.py` on the job folder. The runner validates the scene again before building. Renders run `blender/scripts/render_runner.py` the same way. See [Architecture](ARCHITECTURE.md#9-blender-architecture).
++
++## 15. Example Complete Workflow
++
++1. `POST /api/designs/interpret` with the brief -> keep `intent`.
++2. `POST /api/designs/plan` with `{"intent": ...}` -> keep `specification`; show `plans` and `report`.
++3. Optionally `POST /api/designs/modify` -> replace `intent`, `specification`, and keep `overrides`.
++4. `POST /api/designs/build` with `{"specification": ...}` -> keep `job_id`, `cameras`.
++5. `POST /api/designs/jobs/{job_id}/renders` -> fetch `image_url`.
++6. `GET` the `blend_url` to download the model; `POST /api/projects` to save.
++
++There is no status endpoint to poll: each call returns when its work is finished.
++
++## 16. curl Examples
++
++```bash
++# Health and Claude verification
++curl http://127.0.0.1:8000/api/health
++curl "http://127.0.0.1:8000/api/health/claude?refresh=true"
++
++# Interpret, then plan (requires jq)
++curl -s -X POST http://127.0.0.1:8000/api/designs/interpret \
++  -H "Content-Type: application/json" \
++  -d '{"prompt": "A single-storey modern bungalow with two bedrooms and a flat roof", "constraints": {"floors": 1}}' \
++  > interpretation.json
++jq '{intent: .intent}' interpretation.json | curl -s -X POST http://127.0.0.1:8000/api/designs/plan \
++  -H "Content-Type: application/json" --data @- > plan.json
++
++# Build, then render the rear in evening light
++jq '{specification: .specification}' plan.json | curl -s -X POST http://127.0.0.1:8000/api/designs/build \
++  -H "Content-Type: application/json" --data @- > build.json
++JOB=$(jq -r .job_id build.json)
++curl -s -X POST "http://127.0.0.1:8000/api/designs/jobs/$JOB/renders" \
++  -H "Content-Type: application/json" -d '{"camera": "Camera_Exterior_Rear", "preset": "evening"}'
++
++# Download the model
++curl -o building.blend "http://127.0.0.1:8000/api/designs/jobs/$JOB/building.blend"
++```
++
++## 17. Python Client Example
++
++```python
++import httpx
++
++API = "http://127.0.0.1:8000/api"
++with httpx.Client(timeout=600) as client:
++    interpreted = client.post(f"{API}/designs/interpret", json={
++        "prompt": "A two-storey house with three bedrooms, a garage and a gable roof",
++    }).json()
++    plan = client.post(f"{API}/designs/plan", json={"intent": interpreted["intent"]}).json()
++    print(plan["summary"], plan["report"]["status"])
++
++    built = client.post(f"{API}/designs/build", json={"specification": plan["specification"]}).json()
++    render = client.post(f"{API}/designs/jobs/{built['job_id']}/renders", json={"quality": "preview"}).json()
++    with open("front.png", "wb") as f:
++        f.write(client.get(f"http://127.0.0.1:8000{render['image_url']}").content)
++```
++
++Errors raise no exception here; check `response.status_code` and read `response.json()["error"]` in real code.
++
++## 18. JavaScript Example
++
++```javascript
++async function api(path, body) {
++  const response = await fetch(`/api${path}`, {
++    method: body ? "POST" : "GET",
++    headers: body ? { "Content-Type": "application/json" } : undefined,
++    body: body ? JSON.stringify(body) : undefined,
++  });
++  const data = await response.json();
++  if (!response.ok) throw new Error(`${data.error.code}: ${data.error.message}`);
++  return data;
++}
++
++const { intent } = await api("/designs/interpret", { prompt: "A small office with two meeting rooms" });
++const plan = await api("/designs/plan", { intent });
++console.log(plan.summary, plan.notes);
++```
++
++## 19. API Limitations
++
++- No authentication or authorisation.
++- No rate limiting.
++- Long synchronous requests: interpretation can take tens of seconds and a high-quality render on a CPU many minutes; nothing is queued, and a disconnected client does not cancel Blender.
++- No progress or status endpoints for running work.
++- No pagination on `GET /api/projects`.
++- No deletion of build and render files through the API.
++- Single-machine storage: jobs and projects are files under `output/`.
++
++## 20. Future API Improvements
++
++These are recommendations, not existing features:
++
++- Authentication (at least an API token) before any non-local deployment.
++- Rate limiting, particularly on the endpoints that call Anthropic or start Blender.
++- A job queue with `202 Accepted`, a job status endpoint and live progress (for example server-sent events), so builds and renders do not hold a request open.
++- Cleanup endpoints, or retention rules, for `output/jobs/`.
++- Pagination and search for projects.
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+new file mode 100644
+index 0000000..95e1444
+--- /dev/null
++++ b/ARCHITECTURE.md
+@@ -0,0 +1,308 @@
++# AI Architect Agent - System Architecture
++
++This document explains how AI Architect Agent works internally. For endpoint-level details see [API Documentation](API_DOCUMENTATION.md); for installation see [Installation Guide](INSTRUCTION.md); for security see [Security](SECURITY.md); for an evaluation of these choices see [Project Review](PROJECT_REVIEW.md). Deeper design notes live in [docs/](docs/architecture.md).
++
++---
++
++## 1. Architecture Overview
++
++The system is a local web application with three runtimes:
++
++1. **A React frontend** (Vite, TypeScript) that collects the brief, shows the review and drives each step.
++2. **A FastAPI backend** (Python) that calls Claude, plans and validates the building, compiles it into data for Blender, manages builds, renders and saved projects.
++3. **Blender**, started by the backend as a separate process for each build or render, running the project's own scripts.
++
++The guiding principle is a narrow use of AI. Claude does one thing: turn language into a structured, schema-constrained design intent (and, for changes, a list of typed operations). Everything after that is deterministic Python that can be tested: the planner, the validator, the scene compiler and the Blender scripts. Blender never runs code produced by Claude or by the backend; it receives a data file and builds only what that data describes.
++
++## 2. High-Level Architecture Diagram
++
++```mermaid
++flowchart LR
++    User([User]) --> Frontend["React frontend<br/>(Vite dev server)"]
++    Frontend -->|"/api/* (JSON)"| Backend["FastAPI backend"]
++    Backend -->|"structured-output requests"| Claude["Anthropic API<br/>(Claude)"]
++    Backend --> Planner["Planner + validation"]
++    Planner --> Compiler["Scene compiler"]
++    Compiler -->|"scene.json (data only)"| Blender["Blender subprocess<br/>runner.py / render_runner.py"]
++    Blender -->|"building.blend, result.json, PNG"| Jobs[("output/jobs/")]
++    Backend <--> Projects[("output/projects/<br/>JSON files")]
++    Jobs --> Backend
++```
++
++## 3. Frontend Architecture
++
++| Aspect | Implementation |
++| --- | --- |
++| Framework | React 19 with TypeScript, built by Vite 8; Tailwind CSS 4 for styling |
++| Entry | `frontend/src/main.tsx` renders `App.tsx` |
++| State | Plain React state in custom hooks; no global store |
++| API client | `frontend/src/services/api.ts`: one `request()` function with per-call timeouts, the error envelope turned into an `ApiError`, and Claude error codes translated by `utils/errorMessages.ts` |
++| Development proxy | `vite.config.ts` forwards `/api` to `BACKEND_URL` (default `http://127.0.0.1:8000`) |
++
++Hooks hold each part of the workflow:
++
++| Hook | Responsibility |
++| --- | --- |
++| `useHealth` | Backend health and configuration |
++| `useInterpretation` | Interpret, then plan; plain-English changes; restoring a saved project |
++| `useBuild` | Blender build |
++| `useRenders` | Renders and the automatic preview after each build |
++| `useProjects` | Project list, save (with version), delete |
++
++Components follow the screen's three columns: the brief (`PromptPanel`, `AdvancedOptions`, `ProjectsPanel`), the work area (`PlanSheet` when empty, then `DesignReview` with `SaveBar`, `FloorPlans`, `ModifyPanel`, `ValidationPanel`, `RenderPanel`), and status (`SystemStatus`, `PipelineStages`).
++
++**Generation status.** `PipelineStages` shows ten stages. Their state comes from the requests: a stage is *in progress* while the request that performs it is pending and *complete* when that request's response lists it in `completed_stages`. There is no streaming of progress from the backend.
++
++**Timeouts** in the API client: 8 seconds by default; 3 minutes for interpretation and changes; 30 seconds for planning; 10 minutes for builds; 30 minutes for renders.
++
++## 4. Backend Architecture
++
++```
++app/main.py              app factory: logging, middleware, CORS, error handlers, routers
++app/core/                settings (pydantic-settings), logging, request-ID and body-size middleware, error envelope
++app/api/routes/          HTTP layer: health, specifications, examples, designs, projects
++app/schemas/             request and response models for the HTTP layer
++app/agents/              ArchitectAgent, ModificationAgent and their system prompts
++app/services/            Claude client, Blender build and render services, examples, summaries
++app/models/              domain models: BuildingSpecification, DesignIntent, rooms, openings, stairs, roof...
++app/validation/          validation engine, rules, safe automatic fixes
++app/planner/             deterministic floor planner, layout anchoring, SVG plans
++app/modification/        ChangeSets, applying changes, describing differences
++app/scene/               scene compiler: walls, openings, stairs, roof, landscape, cameras, lighting
++app/geometry/            rectangles, segments, opening placement, stair and roof maths
++app/projects/            saved-project models and the JSON repository
++```
++
++Routes are thin: they validate input with Pydantic, call a service or agent, and shape the response. Services that need configuration are created per request from `Settings` through FastAPI dependencies, which lets tests substitute fakes.
++
++## 5. Claude Service Architecture
++
++```mermaid
++flowchart TD
++    Brief["Brief + advanced options"] --> Message["User message: brief wrapped in tags<br/>+ options as constraints"]
++    System["System prompt<br/>agents/prompts/architect_system.md"] --> Request
++    Message --> Request["AnthropicStructuredClient.generate()"]
++    Schema["JSON Schema from DesignIntent<br/>transform_schema + prepare_schema"] --> Request
++    Request -->|"output_config.format"| Anthropic["Anthropic API"]
++    Anthropic --> Parse["json.loads + Pydantic validation"]
++    Parse --> Rules["Intent validation rules<br/>+ advanced options applied"]
++    Rules -->|"problems (first attempt)"| Feedback["Problems sent back to Claude"]
++    Feedback --> Request
++    Rules -->|"valid"| Intent["DesignIntent"]
++```
++
++- **One request path.** `AnthropicStructuredClient` (`app/services/claude_service.py`) is the only code that calls the SDK. `_create()` builds every request; `classify()` turns every SDK exception into a stable `CLAUDE_*` code; failures are logged with HTTP status, Anthropic error type, request ID and message, never the key.
++- **Structured outputs.** Interpretation and modification send the schema in `output_config.format`, so replies are constrained to it. Schemas come from the Pydantic models through the SDK's `transform_schema` and are checked at import by `prepare_schema` against what structured outputs accept.
++- **Fallbacks.** If Anthropic rejects `cache_control`, the request is retried without prompt caching and caching is switched off for the process. If it rejects the schema itself, the request is retried with the schema in the instructions and no `output_config` (JSON-only), remembered per schema. Account, key, model, permission, connection and rate-limit errors never fall back.
++- **Correction loop.** The agents (`ArchitectAgent`, `ModificationAgent`) validate every reply and send specific problems back once (`ARCHITECT_MAX_ATTEMPTS`, default 2).
++- **Health check.** `check()` sends a tiny text request and a tiny structured request; `GET /api/health/claude` caches the result for 10 minutes.
++
++## 6. Generation Pipeline
++
++```mermaid
++flowchart TD
++    A["1 Understanding request<br/>POST /designs/interpret<br/>Claude -> DesignIntent"] --> B
++    B["2-4 Specification, validation, planning<br/>POST /designs/plan<br/>planner -> BuildingSpecification + SVG plans"] --> R{"User review"}
++    R -->|"change in plain English"| M["POST /designs/modify<br/>Claude -> ChangeSet -> re-plan"]
++    M --> R
++    R -->|"Approve and generate"| C["5 Preparing Blender scene<br/>POST /designs/build<br/>compile_scene -> scene.json"]
++    C --> D["Blender: runner.py<br/>validate scene -> materials -> geometry<br/>-> lighting -> cameras -> save .blend"]
++    D --> E["10 Rendering<br/>POST /designs/jobs/{id}/renders<br/>render_runner.py -> PNG"]
++```
++
++Inside Blender the order is: create collections, **materials**, geometry (walls, slabs, floors, doors, windows, stairs, balconies, roof, site and planting), world and lights, cameras, view layers, save. The frontend lists *Generating geometry* before *Applying materials*; both are completed by the same response.
++
++## 7. Data Flow
++
++```mermaid
++flowchart LR
++    P["prompt<br/>(string)"] --> I["DesignIntent<br/>(rooms, areas, sides, roof)"]
++    I --> S["BuildingSpecification<br/>(positioned rooms, openings,<br/>stairs, roof, site)"]
++    S --> SC["SceneSpec / scene.json<br/>(boxes, meshes, materials,<br/>cameras, lights)"]
++    SC --> BL["building.blend<br/>+ result.json"]
++    BL --> PNG["render PNG"]
++    S -.-> SVG["SVG floor plans"]
++    S -.-> PR["project JSON<br/>(intent, overrides, spec,<br/>history, job IDs)"]
++```
++
++Each arrow is a pure function or a validated hand-over, which keeps every stage testable on its own: `DesignIntent` (Claude's output, validated) -> `plan_building()` -> `BuildingSpecification` (validated) -> `compile_scene()` -> `SceneSpec` (validated again by Blender) -> Blender objects.
++
++## 8. Architectural Data Model
++
++| Entity | Model | Notes |
++| --- | --- | --- |
++| Design intent | `DesignIntent` (`app/models/intent.py`) | What Claude produces: rooms with target areas and preferred sides, connections, stairs, roof, exterior, site |
++| Building | `BuildingSpecification` (`app/models/building.py`) | Schema version `1.0`; the single source of truth |
++| Floor | `Floor` | Level, elevation, height |
++| Room | `Room` (`app/models/room.py`) | 19 room types; axis-aligned rectangle on one floor; finishes |
++| Door, window, balcony | `app/models/opening.py` | Positioned on room edges by offset and width |
++| Stair | `Stair` (`app/models/stairs.py`) | Footprint, direction, risers, rise, run |
++| Roof | `Roof` (`app/models/roof.py`) | Flat, gable, hip or shed; pitch, overhang, ridge direction |
++| Materials | `MaterialRef` (`app/models/materials.py`) | One of 19 material IDs, optionally with a colour |
++| Site | `Environment` (`app/models/environment.py`) | Ground, driveway, paths, patio, vegetation, sun |
++| Scene | `SceneSpec` (`app/scene/model.py`) | Elements, materials, collections, cameras, lights, worlds, view layers |
++| Change | `ChangeSet` and typed operations (`app/modification/changeset.py`) | Claude's reply to a change request |
++| Project | `Project` (`app/projects/model.py`) | Saved state plus server-derived paths and report |
++
++## 9. Blender Architecture
++
++`BlenderService` (`app/services/blender_service.py`) creates a job folder, writes `scene.json` and runs:
++
++```
++<blender> --background --factory-startup --python blender/scripts/runner.py -- <job_dir>     (binary mode)
++<python-with-bpy> blender/scripts/runner.py -- <job_dir>                                      (python mode)
++```
++
++Inside Blender:
++
++| Script | Role |
++| --- | --- |
++| `runner.py` | Entry point: reads and validates the scene, builds it, saves `building.blend`, writes `result.json` with every object's bounds, material and mesh checks |
++| `scene_validation.py` | Re-validates the scene: allowed element kinds, names, finite bounded numbers, mesh indices, size limits (`MAX_ELEMENTS` 20,000, `MAX_BOXES` 400 per element, `MAX_VERTICES` 5,000, coordinates within ±1,000 m) |
++| `scene_builder.py` | Collections, then materials, then dispatch to the generators, then lighting, cameras and view layers |
++| `mesh_utils.py` | Turns boxes or explicit meshes into Blender mesh objects |
++| `wall_generator.py`, `floor_generator.py`, `door_generator.py`, `window_generator.py`, `stair_generator.py`, `balcony_generator.py`, `roof_generator.py`, `ground_generator.py`, `environment_generator.py` | One generator per element kind |
++| `material_generator.py`, `material_nodes.py` | Procedural material recipes and shared texture coordinates |
++| `lighting_generator.py`, `lighting_presets.py` | Worlds, sun and interior lights; switching presets |
++| `camera_generator.py` | Cameras from the compiled positions |
++| `render_runner.py`, `render_settings.py` | Rendering, with its own request validation |
++
++All geometry is computed by the backend's scene compiler (`app/scene/`); the Blender scripts only create what the data describes.
++
++## 10. Geometry Generation
++
++The algorithms are deliberately simple and exact:
++
++- **Layout.** The planner (`app/planner/`) places a full-depth hall ("spine") with one or two columns of rooms beside it, on a rectangular footprint. It searches spine positions in 0.1 m steps, scoring each layout with a cost function (area error, proportions, stranded rooms), then places doors, windows, balconies and the site. A modified design reuses the previous arrangement (`app/planner/anchor.py`).
++- **Walls.** Wall runs are derived from shared room edges and the footprint; exterior walls are 0.3 m and interior walls 0.1 m thick. Each run is split into solid pieces around its openings (full-height pieces between openings, a lintel above, a sill wall below windows): no boolean operations.
++- **Stairs** are one solid block per tread; the slab above and the landing floor get a matching stairwell opening.
++- **Roofs** are closed meshes: a slab for flat roofs, hand-built vertex and face lists for gable, hip and shed roofs, with gable-end infill.
++- **Checks.** Tests check that no two solid boxes overlap, that every opening is clear and that every mesh is closed with outward normals, both in Python and inside Blender.
++
++## 11. Material System
++
++Each material in the scene names a **recipe** (one of 19 material IDs: brick, white render, concrete, timber cladding, slate, clay tile, standing-seam metal, glass, and so on) and a base colour, which carries any colour override from the specification. `material_generator.py` builds a node tree for each recipe from Blender texture nodes; no image files are used. A shared node group, `AIARCH_WorldUV`, projects world-space position onto each face, so brick courses continue across separate wall pieces at true scale. Planting uses two scene-only recipes, foliage and bark, which are not offered to Claude.
++
++## 12. Lighting System
++
++The scene compiler produces two presets:
++
++- **Day:** a sun from the specification's sun direction and a sky matching its sky type.
++- **Evening:** a low warm sun and a dusk sky, with interior lights brighter.
++
++Each room gets ceiling area lights sized to its floor area; garages are left unlit. Presets are separate worlds and light collections (`LIGHTS_DAY`, `LIGHTS_EVENING`, `LIGHTS_INTERIOR`); `lighting_presets.apply_preset()` switches between them. The sky is built from basic nodes so it looks the same in Blender 4 and 5.
++
++## 13. Camera System
++
++Cameras are computed by the backend (`app/scene/cameras.py`):
++
++- **Exterior** (front, rear, aerial): perspective cameras placed by bisecting the distance until the whole building fills at most 88% of the frame.
++- **Interior** (living room, kitchen, master bedroom, where those rooms exist): in the corner opposite the main windows, at eye height.
++- **Floor plans** (one per floor): orthographic, from above, each with its own view layer that hides the roof, the floors above and that floor's ceiling. Each plan camera records its view layer in `aiarch_view_layer`.
++
++## 14. Rendering Pipeline
++
++`RenderService` (`app/services/render_service.py`) checks the camera exists, chooses the engine, writes a request file and runs `render_runner.py`, which:
++
++1. opens `building.blend` and validates the request against its own whitelists;
++2. applies the lighting preset and selects the camera;
++3. enables exactly one view layer (the camera's floor-plan layer, or the main layer);
++4. renders to `renders/<render_id>.png` and rejects blank images.
++
++| Quality | Cycles samples | EEVEE samples | Resolution scale |
++| --- | --- | --- | --- |
++| Preview | 16 | 16 | 50% |
++| Standard | 64 | 64 | 100% |
++| High | 256 | 128 | 100% |
++
++Resolutions are 1280 x 720, 1920 x 1080 and 2560 x 1440. With `auto`, a one-off test render decides the engine for the process: Cycles if EEVEE fails or Blender reports a software OpenGL renderer (such as llvmpipe), otherwise EEVEE unless it is more than 1.5 times slower than Cycles.
++
++## 15. Project Storage
++
++**There is no database.** Saved projects are JSON files in `output/projects/<id>.json`, managed by `JsonProjectRepository` behind the `ProjectRepository` protocol (`app/projects/repository.py`):
++
++- writes go to a temporary file renamed into place (atomic on the same filesystem);
++- every save carries the version it was based on, and a stale save returns `409 project_changed`;
++- the server validates the specification itself and derives every file path and URL from IDs;
++- a damaged file is skipped in the list rather than hiding the others.
++
++Builds and renders live in `output/jobs/<job_id>/`. Nothing is deleted automatically.
++
++## 16. Configuration Architecture
++
++`Settings` (`app/core/config.py`, pydantic-settings) reads environment variables and the `.env` file in the project root, with typed defaults and bounds. Settings are read once at start-up. Blank storage directories fall back to their defaults. The frontend has one setting of its own, `BACKEND_URL`, read by `vite.config.ts`. Every setting is listed in `.env.example` and in the [Installation Guide](INSTRUCTION.md#6-environment-configuration); a test fails if the two drift apart.
++
++## 17. Error Handling Architecture
++
++```mermaid
++flowchart LR
++    X["Anthropic SDK exception<br/>or Blender failure"] --> S["Service classifies it<br/>(ClaudeError / AppError: code, safe message,<br/>details only outside production)"]
++    S --> H["App error handler<br/>error envelope + request_id + log"]
++    H --> F["Frontend ApiError<br/>code -> clear message"]
++    F --> U["Message on screen,<br/>stage marked Failed"]
++```
++
++Unexpected exceptions become `500 internal_error` with no details in the response; the traceback goes to the server log with the request ID.
++
++## 18. Async / Concurrency Model
++
++- **No background jobs or queue.** Every operation runs within its HTTP request.
++- `interpret` and `modify` are `async` and await the Anthropic SDK's async client.
++- `plan`, `build`, `render` and the project routes are synchronous functions, which FastAPI runs in its thread pool. Builds and renders call `subprocess.run`, blocking that thread until Blender finishes or times out.
++- Several builds or renders can therefore run at once, each its own Blender process, limited only by the thread pool and the machine.
++- **In-process state:** the engine choice for rendering, the Claude verification result and the set of schemas needing the JSON-only path are cached in module-level dictionaries; they reset when the backend restarts and are not shared between processes.
++- Project saves are serialised by a `threading.Lock`, which protects one process only.
++
++## 19. External Dependencies
++
++| Dependency | Role |
++| --- | --- |
++| FastAPI, Uvicorn | HTTP API and server |
++| Pydantic v2, pydantic-settings | Models, validation, settings |
++| Anthropic Python SDK | Claude requests and structured outputs |
++| Blender (or the `bpy` module) | Building, saving and rendering scenes |
++| React, React DOM | User interface |
++| Vite, TypeScript, Tailwind CSS | Frontend build, typing, styling |
++| pytest, pytest-asyncio, httpx, Ruff | Backend tests and lint |
++| Vitest, Testing Library | Frontend tests |
++| `@sparticuz/chromium`, puppeteer-core, axe-core | `tools/visual-check` only |
++
++## 20. Design Decisions
++
++| Decision | Reason visible in the code |
++| --- | --- |
++| Claude produces data, never code | Only data crosses into Blender, re-validated there; AI output cannot execute anything |
++| Structured outputs plus Pydantic plus rules | Three layers of checking before a design is accepted |
++| Deterministic planner | The same intent always produces the same plan; layouts are testable |
++| Review before build | Nothing is built until the user approves |
++| Specification as the single source of truth | Plans, scene, project storage and changes all derive from it |
++| Intent plus overrides for changes | Layout changes re-plan; finishing changes survive re-plans |
++| Blender as a subprocess | Isolation, timeouts, version independence; the backend never imports `bpy` |
++| Files, not a database | Simple local use; storage behind a repository interface |
++
++## 21. Current Architectural Limitations
++
++- Requests block until the work is done; there is no queue, progress stream or cancellation.
++- Rectangular footprints with a central hall only; no L-shaped, curved or multi-wing plans.
++- Process-local caches and locks: running several backend processes would duplicate checks and could race on project saves.
++- Files under `output/` grow without limit.
++- No authentication, accounts or rate limiting (see [Security](SECURITY.md)).
++- Modifications rebuild the whole Blender scene rather than patching it (builds take under a second, and unchanged objects keep their names).
++
++## 22. Future Architecture
++
++The following is a **proposal**, not current behaviour, for multi-user or hosted use:
++
++```mermaid
++flowchart TD
++    W["Web frontend"] --> G["API gateway<br/>(authentication, rate limiting)"]
++    G --> API["Backend API"]
++    API --> Q[("Job queue")]
++    Q --> CW["Claude workers"]
++    Q --> BW["Blender workers<br/>(isolated containers)"]
++    API --> DB[("Database<br/>projects, users, jobs")]
++    BW --> OS[("Object storage<br/>.blend files, renders")]
++    API --> OS
++```
++
++The existing seams make this incremental: `ProjectRepository` can gain a database implementation, the build and render services already isolate Blender in subprocesses with job folders, and every pipeline step is already a separate request.
+diff --git a/INSTRUCTION.md b/INSTRUCTION.md
+new file mode 100644
+index 0000000..f9b96af
+--- /dev/null
++++ b/INSTRUCTION.md
+@@ -0,0 +1,379 @@
++# AI Architect Agent - Installation and Usage Guide
++
++This guide explains how to install, configure, run and troubleshoot AI Architect Agent. For how the system works internally, see [Architecture](ARCHITECTURE.md); for every endpoint, see [API Documentation](API_DOCUMENTATION.md); for a critical evaluation, see [Project Review](PROJECT_REVIEW.md); for security guidance, see [Security](SECURITY.md).
++
++---
++
++## 1. Introduction
++
++AI Architect Agent turns a plain-English building brief into a 3D building model in Blender. Claude (Anthropic's model) interprets the brief; everything after that is deterministic code that can be tested: a room planner, a validation engine, a scene compiler and a set of Blender scripts.
++
++```
++building brief (browser)
++  -> backend (FastAPI)
++  -> Claude: brief -> structured design intent
++  -> room planner: intent -> BuildingSpecification + SVG floor plans
++  -> validation
++  -> you review and approve
++  -> scene compiler: specification -> scene.json (data only)
++  -> Blender: geometry, materials, site, lighting, cameras -> building.blend
++  -> render -> PNG
++```
++
++Nothing is built until you approve the reviewed design, and Claude never writes code that Blender runs: Blender only receives data, which it re-validates (see [Security](SECURITY.md#9-blendersubprocess-security)).
++
++## 2. Main Features
++
++Every feature below is implemented and covered by tests.
++
++| Feature | What it does |
++| --- | --- |
++| Natural-language briefs | Up to 4,000 characters, with optional advanced options (building type, style, floors, size, bedrooms, bathrooms, garage, roof, detail level) |
++| Claude interpretation | Claude returns a structured design intent through Anthropic structured outputs; the result is validated and sent back once for correction if needed |
++| Room planning | A deterministic planner lays out rooms, a stair, doors, windows, balconies and the site, and draws SVG floor plans |
++| Validation | Rules for geometry, access, openings, stairs, roof, site and real wall thickness, with safe automatic fixes |
++| Review before building | Summary, floor plans, requested rooms, planner notes and design checks are shown before anything is built |
++| Blender build | Walls with door and window openings, doors, windows, stairs through stairwells, balconies, flat, gable, hip and shed roofs, 19 procedural materials, driveway, paths, patio and planting |
++| Cameras and lighting | Exterior, interior and floor-plan cameras fitted to the building; day and evening lighting presets with interior lights |
++| Rendering | Any generated camera, day or evening, three quality levels, three resolutions; EEVEE where the machine has a GPU, Cycles otherwise |
++| Plain-English changes | "Make the living room 1 metre wider", "change the roof to a hip roof": applied to the existing design without rearranging the rest |
++| Saved projects | Save, reopen and delete designs with their change history, build and renders |
++| System diagnostics | Backend, Claude key, verified Claude connection, model and Blender status in the System panel |
++
++## 3. Technology Requirements
++
++| Software | Version | Needed for |
++| --- | --- | --- |
++| Python | 3.11 or newer (`backend/pyproject.toml`); CI uses 3.12 | The backend |
++| Node.js and npm | Node.js 22 LTS recommended (CI uses 22). The frontend uses Vite 8, which needs a recent Node.js release | The frontend |
++| Blender | 4.2 LTS or newer; tested on 4.2.0 LTS and 5.2.2 LTS | Building and rendering (optional until you build) |
++| Anthropic API account | An API key **with API credit** | Interpreting briefs and applying changes |
++| Git | Any recent version | Cloning and updating |
++
++**Operating systems.** The project was developed and tested on Linux. The Windows PowerShell commands in this guide have been used on Windows. macOS should work with the Linux commands but has not been tested.
++
++**Blender as a Python module.** Instead of the Blender application, the backend can use a Python environment with the `bpy` package from PyPI (see [Blender setup](#blender-setup)). The automated tests used this route.
++
++## 4. Repository Structure
++
++```
++ai-architect-agent/
++├── .github/workflows/ci.yml   # Lint, backend tests, frontend tests and build, optional Blender job
++├── backend/
++│   ├── app/
++│   │   ├── agents/            # Architect Agent and Modification Agent, with their system prompts
++│   │   ├── api/routes/        # HTTP endpoints: health, specifications, examples, designs, projects
++│   │   ├── core/              # Settings, logging, middleware, error envelope
++│   │   ├── geometry/          # Rectangles, opening placement, stair and roof maths
++│   │   ├── models/            # Pydantic models: BuildingSpecification, DesignIntent, rooms, openings...
++│   │   ├── modification/      # ChangeSets, applying changes, describing what changed
++│   │   ├── planner/           # Deterministic floor planner and SVG floor plans
++│   │   ├── projects/          # Saved-project models and JSON storage
++│   │   ├── scene/             # Scene compiler: specification -> scene.json
++│   │   ├── schemas/           # Request and response models for the API
++│   │   ├── services/          # Claude client, Blender build and render services, examples
++│   │   └── validation/        # Validation engine, rules and automatic fixes
++│   ├── scripts/               # Command-line tools (see below)
++│   └── tests/                 # pytest suites, including blender/, e2e/ and live/
++├── blender/scripts/           # Run inside Blender: scene builder, generators, render runner
++├── docs/                      # Detailed design documents and images
++├── examples/                  # Example prompts and matching specifications
++├── frontend/src/              # React app: components, hooks, API client, types
++├── tools/visual-check/        # Screenshots and an accessibility audit of the running app
++├── .env.example               # Every setting, documented
++├── CHANGELOG.md
++├── README.md
++├── INSTRUCTION.md             # This guide
++├── PROJECT_REVIEW.md
++├── API_DOCUMENTATION.md
++├── ARCHITECTURE.md
++└── SECURITY.md
++```
++
++Generated files go in `output/` (created on first use and ignored by Git).
++
++Command-line tools in `backend/scripts/`:
++
++| Script | Purpose |
++| --- | --- |
++| `check_claude.py` | Step-by-step check of the Claude connection: settings, plain request, prompt caching, structured output with a tiny schema and with both of the app's schemas |
++| `interpret_brief.py` | Interpret a brief from the command line (`--example`, `--plan DIR`, `--json`) |
++| `build_example_specs.py` | Regenerate `examples/specifications/*.json` |
++
++## 5. Installation
++
++### Clone the repository
++
++```bash
++git clone <repository-url> ai-architect-agent
++cd ai-architect-agent
++```
++
++On Windows, keep the project **outside OneDrive** (for example in `C:\dev\ai-architect-agent`): OneDrive tries to sync the tens of thousands of files that `node_modules` and `.venv` contain, which makes installs slow and can lock files.
++
++### Backend setup
++
++Windows (PowerShell):
++
++```powershell
++cd backend
++python -m venv .venv
++.\.venv\Scripts\Activate.ps1
++python -m pip install -r ..\requirements-dev.txt
++```
++
++If activation fails with "running scripts is disabled on this system", run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once and activate again.
++
++macOS and Linux:
++
++```bash
++cd backend
++python3 -m venv .venv
++source .venv/bin/activate
++pip install -r ../requirements-dev.txt
++```
++
++`requirements.txt` holds the runtime dependencies (FastAPI, Uvicorn, Pydantic, pydantic-settings, the Anthropic SDK); `requirements-dev.txt` adds pytest, pytest-asyncio, httpx and Ruff.
++
++### Frontend setup
++
++```bash
++cd frontend
++npm install
++```
++
++### Blender setup
++
++The backend finds Blender only through `BLENDER_EXECUTABLE` in `.env`. The System panel reports one of three states: **Executable found**, **Not set up yet** (variable empty) or **Path not found**.
++
++| Blender installed from | Typical `BLENDER_EXECUTABLE` |
++| --- | --- |
++| blender.org installer (Windows) | `C:\Program Files\Blender Foundation\Blender 4.2\blender.exe` |
++| Steam (Windows) | `C:\Program Files (x86)\Steam\steamapps\common\Blender\blender.exe` |
++| macOS application | `/Applications/Blender.app/Contents/MacOS/Blender` |
++| Linux package or download | `/usr/bin/blender` or the path to the extracted `blender` |
++
++Write the path without quotes. To check it, run it with `--version`.
++
++`BLENDER_MODE` decides how the backend starts Blender:
++
++| Mode | Command used |
++| --- | --- |
++| `binary` | `<blender> --background --factory-startup --python <script> -- <arguments>` |
++| `python` | `<python-with-bpy> <script> -- <arguments>` |
++| `auto` (default) | `python` if the executable's file name starts with "python", otherwise `binary` |
++
++To use the `bpy` module instead of the application, create a separate environment with a matching Python (`bpy` 5.x needs Python 3.13, `bpy` 4.2 needs Python 3.11), `pip install bpy`, and point `BLENDER_EXECUTABLE` at that environment's `python`.
++
++## 6. Environment Configuration
++
++Copy the example file in the project root and edit it:
++
++```powershell
++Copy-Item .env.example .env      # Windows
++```
++
++```bash
++cp .env.example .env             # macOS and Linux
++```
++
++The backend reads `.env` from the project root at start-up only, so **restart the backend after editing it**.
++
++| Variable | Required | Purpose | Example |
++| --- | --- | --- | --- |
++| `ANTHROPIC_API_KEY` | To generate or change designs | Anthropic API key, used only by the backend | `your_api_key_here` |
++| `ANTHROPIC_MODEL` | No | Claude model | `claude-sonnet-5-5` (default) |
++| `ANTHROPIC_MAX_TOKENS` | No | Largest Claude reply | `8000` (default) |
++| `ANTHROPIC_TIMEOUT_SECONDS` | No | Timeout for one Claude request | `120` (default) |
++| `ANTHROPIC_MAX_RETRIES` | No | SDK retries on connection errors and overloads | `2` (default) |
++| `ANTHROPIC_PROMPT_CACHING` | No | Cache the long system prompts; switched off automatically if Anthropic rejects it | `true` (default) |
++| `ARCHITECT_MAX_ATTEMPTS` | No | Claude calls per brief or change: 1 plus corrections | `2` (default) |
++| `BLENDER_EXECUTABLE` | To build and render | Path to Blender, or to a Python with `bpy` | see [Blender setup](#blender-setup) |
++| `BLENDER_MODE` | No | `auto`, `binary` or `python` | `auto` (default) |
++| `BLENDER_TIMEOUT_SECONDS` | No | Longest a build may run | `300` (default) |
++| `RENDER_TIMEOUT_SECONDS` | No | Longest a render may run | `900` (default) |
++| `RENDER_DEFAULT_ENGINE` | No | `auto` (EEVEE with a GPU, otherwise Cycles), `eevee` or `cycles` | `auto` (default) |
++| `EEVEE_PROBE_TIMEOUT_SECONDS` | No | Longest the one-off EEVEE test render may take | `45` (default) |
++| `APP_ENV` | No | `development` or `production`; production hides Anthropic's error text from the browser | `development` (default) |
++| `LOG_LEVEL` | No | Backend log level | `INFO` (default) |
++| `API_HOST`, `API_PORT` | No | Address the backend reports for itself | `127.0.0.1`, `8000` |
++| `CORS_ORIGINS` | No | Browser origins allowed to call the API, comma-separated | `http://localhost:5173,http://127.0.0.1:5173` (default) |
++| `JOBS_DIR` | No | Where builds and renders are written | `output/jobs` (default) |
++| `PROJECTS_DIR` | No | Where saved projects are written | `output/projects` (default) |
++| `EXAMPLES_DIR` | No | Example prompts and specifications | `examples` (default) |
++| `MAX_REQUEST_BYTES` | No | Largest request body accepted | `1048576` (1 MB, default) |
++| `BACKEND_URL` | No (frontend only) | Where the Vite dev server forwards `/api` requests | `http://127.0.0.1:8000` (default) |
++
++`APP_NAME` also exists as a setting, but it is the product name rather than configuration. Empty values for `JOBS_DIR` and `PROJECTS_DIR` fall back to the defaults rather than the current directory.
++
++## 7. Anthropic API Setup
++
++1. **Create a key** at console.anthropic.com under **API Keys**.
++2. **Add API credit** under **Settings -> Billing**. API usage is billed separately from a Claude.ai subscription: a Pro or Max plan does not include API credit. Without credit every request fails with `CLAUDE_BILLING_ERROR`.
++3. **Put the key in `.env`** in the project root: `ANTHROPIC_API_KEY=your_api_key_here`. The key stays on the backend: it is never sent to the browser, logged or returned by any endpoint.
++4. **Choose the model** with `ANTHROPIC_MODEL` if you do not want the default `claude-sonnet-5-5`.
++5. **Check the connection**, either:
++   - in the app: **Verify** in the System panel (a tiny text request and a tiny structured-output request, cached for 10 minutes), or
++   - in a terminal, with the backend's environment active:
++
++     ```bash
++     cd backend
++     python -m scripts.check_claude
++     ```
++
++     It checks the settings, a plain request, prompt caching, structured output with a tiny schema, then with the interpretation and modification schemas, and stops at the first failure with Anthropic's own explanation and what to do.
++
++## 8. Running the Application
++
++Two terminals are needed.
++
++**Terminal 1, backend** (Windows; on macOS and Linux use `source .venv/bin/activate`):
++
++```powershell
++cd backend
++.\.venv\Scripts\Activate.ps1
++uvicorn app.main:app --reload --port 8000
++```
++
++**Terminal 2, frontend:**
++
++```bash
++cd frontend
++npm run dev
++```
++
++Open http://localhost:5173. The Vite development server forwards every `/api` request to the backend (`BACKEND_URL`, default `http://127.0.0.1:8000`), so the browser only ever talks to one address.
++
++**Production build.** `npm run build` type-checks and builds the frontend into `frontend/dist/`, and `npm run preview` serves that build locally. Serving the built frontend from the backend, or any production deployment, is **not currently implemented**: the project is designed for local use (see [Security](SECURITY.md#19-local-deployment-vs-public-deployment)).
++
++## 9. Using AI Architect Agent
++
++1. Start the backend and the frontend, and open http://localhost:5173.
++2. Check the **System** panel: *Backend API* connected, *Claude API key* configured, *Blender* found. Click **Verify** under *Claude API*: it should report *Verified*.
++3. Type a brief in **Describe the building you want to create**, or click **Example prompt**.
++4. Optionally open **Advanced options** to fix the building type, style, number of floors, dimensions, bedrooms, bathrooms, garage, roof or detail level. Options override the brief.
++5. Click **Generate design**. Claude interprets the brief, then the planner lays it out (stages 1 to 4).
++6. **Review** the result: summary, floor plans for each floor (tabs), *Change this design*, requested rooms, how the plan differs from the brief, and design checks. Nothing has been built yet.
++7. Optionally describe a change in **Change this design** and click **Apply change**. The list under *What changed* shows exactly what was altered.
++8. Click **Approve and generate**. Blender builds the house (stages 5 to 9) and a preview of the front renders automatically (stage 10).
++9. Click **Download the .blend file** to open the model in Blender, or use **Renders** to render any camera in day or evening light at higher quality.
++10. Name the design and click **Save project**. It appears under **Projects**, where you can reopen or delete it. **Edit brief** returns to the brief to start a new design.
++
++## 10. Writing Good Building Briefs
++
++The planner places rooms in one or two columns either side of a central hall on a rectangular footprint, so briefs for rectangular houses and small offices work best. Floors from one to three have been tested extensively; the model accepts up to ten.
++
++Good briefs name the rooms and their rough sizes, the number of floors, materials and the roof:
++
++- **Simple house:** "A single-storey modern bungalow with two bedrooms, a bathroom, an open-plan kitchen and living room, white render walls and a flat roof."
++- **Family house:** "Create a two-storey contemporary British detached house with three bedrooms, two bathrooms, an open-plan kitchen and dining area, separate living room, downstairs WC, utility room and single garage."
++- **Scandinavian house:** "A two-storey Scandinavian house clad in dark timber, with a steep metal roof, four bedrooms, large windows to the garden and an open-plan ground floor."
++- **Larger house:** "A large contemporary house with a double garage, home office, open-plan kitchen and dining room, four bedrooms (the master with en-suite, dressing room and a rear balcony) and a hip slate roof."
++- **Small office:** "A two-storey office with a reception, an open-plan office for twelve people, two meeting rooms, a kitchen and accessible toilets."
++
++The five matching examples are in `examples/prompts/`. Requests that are not buildings, or not achievable on a rectangular footprint (curved walls, L-shaped plans, courtyards), are either refused or simplified, and the review lists the simplifications.
++
++## 11. Generation Stages
++
++The stage list in the right-hand panel shows real progress. Each stage completes when the HTTP request that performs it returns; stages within one request (for example 5 to 9, all done by one Blender build) complete together.
++
++| # | Stage | Request | Input -> output | Typical errors |
++| --- | --- | --- | --- | --- |
++| 1 | Understanding request | `POST /api/designs/interpret` | Brief and options -> validated design intent from Claude | `anthropic_key_missing`, `CLAUDE_*` codes, `not_a_building_request`, `design_interpretation_failed` |
++| 2 | Creating architectural specification | `POST /api/designs/plan` | Intent -> `BuildingSpecification` | Planning failure (with the reason) |
++| 3 | Validating design | same request | Specification -> validation report and safe fixes | `building_validation_failed` |
++| 4 | Planning rooms | same request | Room layout and SVG floor plans | as stage 2 |
++| 5 | Preparing Blender scene | `POST /api/designs/build` | Specification -> `scene.json`; Blender starts | `blender_unavailable` |
++| 6 | Generating geometry | same request | Walls, openings, slabs, stairs, roof, site | `blender_build_failed`, `blender_timeout` |
++| 7 | Applying materials | same request | 19 procedural material recipes (created before geometry inside Blender) | as stage 6 |
++| 8 | Creating lighting | same request | Sun, sky and interior lights; day and evening presets | as stage 6 |
++| 9 | Creating cameras | same request | Exterior, interior and floor-plan cameras | as stage 6 |
++| 10 | Rendering | `POST /api/designs/jobs/{job_id}/renders` | Camera and options -> PNG | `render_failed`, `render_timeout`, `unknown_camera` |
++
++Error codes are explained in [API Documentation](API_DOCUMENTATION.md#11-error-responses).
++
++## 12. Output Files
++
++| File | Location | Created by |
++| --- | --- | --- |
++| `scene.json` | `output/jobs/<job_id>/` | Build: the data sent to Blender |
++| `building.blend` | `output/jobs/<job_id>/` | Build: the Blender model (also downloadable) |
++| `result.json` | `output/jobs/<job_id>/` | Build: what Blender built, per object and material |
++| `progress.jsonl`, `blender.log` | `output/jobs/<job_id>/` | Build: progress and Blender's output |
++| `<render_id>.png` | `output/jobs/<job_id>/renders/` | Render: the image |
++| `<render_id>.json`, `.request.json`, `.log` | `output/jobs/<job_id>/renders/` | Render: result, request and Blender's output |
++| `<project_id>.json` | `output/projects/` | Save project |
++| `_engine_probe/` | `output/jobs/` | The one-off engine test used by `auto` rendering |
++
++Floor plans are SVG drawings returned in API responses; they are not written to disk. `output/` is not cleaned up automatically.
++
++## 13. Troubleshooting
++
++| Problem | Cause | Solution |
++| --- | --- | --- |
++| *Backend API: Unreachable* | The backend is not running, or runs on another port | Start it with `uvicorn app.main:app --reload --port 8000`; check `BACKEND_URL` if you changed the port |
++| *Claude API key: Not set* | `ANTHROPIC_API_KEY` empty or `.env` not in the project root | Add the key to `.env` next to `.env.example`, then restart the backend |
++| `CLAUDE_BILLING_ERROR` | The Anthropic account has no API credit | Add credit at console.anthropic.com -> Settings -> Billing; a Claude.ai subscription does not include it. Then **Verify** again |
++| `CLAUDE_AUTH_ERROR` | The key was rejected (mistyped, revoked) | Create a new key and update `.env`; restart the backend |
++| `CLAUDE_MODEL_ERROR` | `ANTHROPIC_MODEL` is not available to the account | Correct the model in `.env`; restart |
++| `CLAUDE_PERMISSION_ERROR` | The key's workspace may not use the model | Check the key's workspace permissions in the console |
++| `CLAUDE_BAD_REQUEST` (HTTP 400) | Anthropic rejected the request for another reason | In development the app shows Anthropic's reason; run `python -m scripts.check_claude` |
++| `CLAUDE_SCHEMA_ERROR` | Anthropic rejected a structured-output schema | The app falls back to JSON-only replies automatically; report the `check_claude` output |
++| `CLAUDE_RATE_LIMIT` | Too many requests for the account's limits | Wait a minute and try again |
++| `CLAUDE_CONNECTION_ERROR` | No route to api.anthropic.com | Check the connection, VPN or proxy |
++| *The brief could not be interpreted* after two attempts | Claude's reply failed validation twice | Rephrase the brief more concretely, or use Advanced options |
++| *Blender: Not set up yet* or *Path not found* | `BLENDER_EXECUTABLE` empty or wrong | Set the full path to the executable, without quotes; restart the backend |
++| `blender_build_failed` | Blender ran but could not build the scene | Read `output/jobs/<job_id>/blender.log`; check the Blender version is 4.2 or newer |
++| `blender_timeout` / `render_timeout` | The build or render took too long | Use Preview quality or a lower resolution; raise `RENDER_TIMEOUT_SECONDS` |
++| Renders say *Cycles was used because this machine has no GPU* | No GPU, so EEVEE would run on a software renderer | Expected; set `RENDER_DEFAULT_ENGINE=eevee` only on a machine with a GPU |
++| `Activate.ps1` cannot be loaded | PowerShell execution policy | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
++| `npm install` or Vite fails to start | Node.js too old | Install Node.js 22 LTS |
++| Port 8000 or 5173 already in use | Another backend or frontend is still running | Stop it (Ctrl+C in its terminal) or use another port (`--port`, and `BACKEND_URL` for the frontend) |
++| Changes to `.env` have no effect | Settings are read only at start-up | Restart the backend |
++
++## 14. Testing
++
++```bash
++# Backend tests and lint (from backend/, environment active)
++python -m pytest
++ruff check app tests scripts ../blender/scripts
++
++# Frontend tests, type check and build (from frontend/)
++npm test
++npm run typecheck
++npm run build
++
++# Real Blender tests (optional)
++BLENDER_EXECUTABLE=/path/to/blender python -m pytest tests/blender -v
++
++# The whole pipeline over HTTP with real Blender and a scripted Claude (optional)
++BLENDER_EXECUTABLE=/path/to/blender python -m pytest tests/e2e -v -s
++
++# Live Claude tests (optional; use the API and cost a few cents)
++RUN_LIVE_CLAUDE_TESTS=1 python -m pytest -m live -v -s
++```
++
++In PowerShell, set variables first: `$env:BLENDER_EXECUTABLE = "C:\path\to\blender.exe"` or `$env:RUN_LIVE_CLAUDE_TESTS = "1"`, then run `python -m pytest ...`.
++
++Screenshots and an accessibility audit of the running app: `cd tools/visual-check && npm install && npm run check`.
++
++## 15. Updating the Project
++
++- **Code:** `git pull`, then reinstall dependencies (`pip install -r ../requirements-dev.txt` and `npm install`) in case they changed, and run the tests.
++- **Dependencies:** versions are bounded in `requirements.txt` and `frontend/package.json`. After updating, run the full test suites, and the real-Blender tests if the Blender scripts changed. Check the Anthropic SDK's release notes before crossing a major version.
++- **Configuration:** compare your `.env` with `.env.example` after updating: new settings appear there first. Restart the backend after any change.
++
++## 16. Quick Start
++
++```powershell
++# once
++cp .env.example .env                 # add ANTHROPIC_API_KEY and BLENDER_EXECUTABLE
++cd backend; python -m venv .venv; .\.venv\Scripts\Activate.ps1; python -m pip install -r ..\requirements-dev.txt
++python -m scripts.check_claude       # should end with "Everything works"
++cd ..\frontend; npm install
++
++# every time: terminal 1
++cd backend; .\.venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --port 8000
++# every time: terminal 2
++cd frontend; npm run dev             # then open http://localhost:5173
++```
+diff --git a/PROJECT_REVIEW.md b/PROJECT_REVIEW.md
+new file mode 100644
+index 0000000..2e7e1b1
+--- /dev/null
++++ b/PROJECT_REVIEW.md
+@@ -0,0 +1,253 @@
++# AI Architect Agent - Project Review
++
++A technical review of the project as it stands at version 1.0.0-rc.1, covering what works, what does not, and what should come next. Supporting detail is in the [Installation Guide](INSTRUCTION.md), [Architecture](ARCHITECTURE.md), [API Documentation](API_DOCUMENTATION.md) and [Security](SECURITY.md).
++
++---
++
++## 1. Executive Summary
++
++AI Architect Agent turns a plain-English building brief into a validated building specification, a reviewed floor plan, a Blender model and rendered images, and lets the user change the design in plain English.
++
++**Maturity:** a complete, well-tested **release candidate for local, single-user use**. Every stage of the pipeline is implemented and exercised by automated tests, including an end-to-end test that drives the whole definition of done over HTTP with real Blender. The one external dependency not covered by automated tests is the live Claude API: those tests exist but run only on request with a key.
++
++**Strengths:** a strict boundary between AI and execution (Claude produces validated data, never code); a deterministic, testable pipeline; careful error handling; extensive tests, including real-Blender tests on two Blender versions.
++
++**Limitations:** rectangular plans only; synchronous long-running requests with no job queue; no authentication or rate limiting; file-based storage that does not scale beyond one process.
++
++## 2. Project Objectives
++
++Early-stage residential design involves translating a client's description into a feasible layout and a visual model, which is slow and requires specialist tools. The project explores whether a language model can handle the *language* part reliably while conventional, verifiable code handles the *geometry* part, producing results a user can inspect, change and render without 3D modelling skills.
++
++It is a concept-design tool. It does not check building regulations, structure or energy performance, and says so in the interface.
++
++## 3. Current Capabilities
++
++| Capability | Status | Notes |
++| --- | --- | --- |
++| Brief interpretation by Claude | Implemented | Structured outputs, Pydantic validation, one corrective retry |
++| Advanced options (constraints) | Implemented | Override the brief: floors, size, rooms, garage, roof, style |
++| Room planning | Implemented | Rectangular footprint, central hall, one or two columns of rooms |
++| Non-rectangular plans | Not implemented | No L-shapes, courtyards or curved walls |
++| Validation and automatic fixes | Implemented | Geometry, access, openings, stairs, roof, site, wall thickness |
++| SVG floor plans | Implemented | Returned in responses, not saved to disk |
++| Blender model | Implemented | Walls with openings, doors, windows, stairs, balconies, four roof types |
++| Procedural materials | Implemented | 19 recipes, no image textures |
++| Site and planting | Implemented | Driveway, paths, patio, low-poly trees, shrubs and hedges |
++| Cameras and lighting | Implemented | Exterior, interior and floor-plan cameras; day and evening presets |
++| Rendering | Implemented | EEVEE or Cycles chosen by measurement; three qualities and resolutions |
++| EEVEE on a real GPU | Implemented, not verified | Development machine had no GPU; only the Cycles fallback was exercised |
++| Plain-English changes | Implemented | Keeps the existing arrangement; verifies each change's effect |
++| Saved projects | Implemented | JSON files, version conflicts, restore in the app |
++| System diagnostics | Implemented | Key, verified Claude connection, model, Blender |
++| Live generation progress | Partially implemented | Stages update when each request returns; no streaming |
++| Furniture, interiors | Not implemented | |
++| Structural or regulatory checks | Not implemented | Out of scope by design |
++| Authentication, multi-user | Not implemented | |
++| Job queue, background processing | Not implemented | |
++
++## 4. Technical Stack Review
++
++| Area | Choice | Assessment |
++| --- | --- | --- |
++| Frontend | React 19, TypeScript, Vite 8, Tailwind CSS 4 | Modern and appropriate. State lives in custom hooks without a global store, which suits the app's size |
++| Backend | FastAPI, Pydantic v2, pydantic-settings | A good fit: typed models double as validation, API schema and documentation |
++| AI | Anthropic SDK, structured outputs | Correct choice for reliable machine-readable output; schemas generated from the same Pydantic models the code uses |
++| 3D | Blender as a subprocess, scripts in the repository | Isolated and version-independent; tested on Blender 4.2 and 5.2 |
++| Validation | Custom rule engine | Domain-specific and well tested; also enforces real wall thickness |
++| Storage | JSON files behind a repository interface | Adequate for local use; the interface leaves room for a database |
++| Testing | pytest, Vitest, Testing Library, a headless-browser audit tool | Broad and layered (unit, API, real Blender, end-to-end) |
++| Configuration | Typed settings with bounds; `.env` | Clean; a test keeps `.env.example` complete |
++
++## 5. Claude Integration Review
++
++**Strengths**
++
++- **One integration point.** `AnthropicStructuredClient` is the only code that calls Anthropic, so request shape, logging and errors are consistent.
++- **Structured outputs.** Interpretation and modification use `output_config.format` with schemas generated from Pydantic, and checked at start-up against what structured outputs accept.
++- **Validation in depth.** Schema, Pydantic, then domain rules; problems go back to Claude once with specific messages.
++- **Error classification.** Nine `CLAUDE_*` codes distinguish key, billing, model, permission, schema, rate-limit and connection problems. Each is logged with status, type and request ID, and explained clearly in the app.
++- **Diagnostics.** The **Verify** button and `scripts/check_claude.py` prove that requests and structured output are accepted, rather than only that a key exists.
++- **Measured costs.** Attempts and tokens are capped, the system prompt is cached, and the health check is cached.
++
++**Weaknesses**
++
++- **Not verified live in automated testing.** The live tests exist but need a key; the release is therefore a candidate.
++- **Model quality is uncontrolled.** The design depends on Claude's judgement within the schema. Tests use scripted replies, so they show the pipeline is correct, not that interpretations are good.
++- **The fallback paths are untested against the real API.** The JSON-only and no-cache fallbacks are covered with mocked responses only.
++- **Latency.** Interpretation takes tens of seconds in a single blocking request, with no streaming of partial results.
++
++## 6. Blender Integration Review
++
++**Strengths**
++
++- **Data-only boundary.** The backend writes `scene.json`; Blender's scripts validate it and create only what it describes.
++- **Robust process handling.** Argument lists, timeouts, captured logs, and a `result.json` contract checked by the backend.
++- **Verified geometry.** Tests check for overlaps, clear openings, closed meshes and outward normals, in Python and inside real Blender.
++- **Version independence.** Both the application and the `bpy` module work, and both Blender 4.2 and 5.2 are tested.
++- **Rendering.** The engine is chosen from Blender's own report of a GPU, after timing-based selection proved unreliable.
++
++**Weaknesses**
++
++- A full rebuild for every change, rather than an incremental update (fast in practice, but not incremental).
++- No sandboxing: Blender runs with the backend's permissions.
++- Builds and renders block an HTTP request for their full duration.
++- Simplified architecture: solid-block stairs without balustrades, closed doors, no attic, no furniture.
++
++## 7. Frontend Review
++
++- **User experience.** A clear three-column layout: brief, work area, system status. The review-before-build step is a good safeguard, and the change panel shows exactly what changed.
++- **Advanced options.** Clearly separated from the brief; the count of options set is shown.
++- **Progress.** Ten stages, honest about state. They update per request rather than live, which makes the Blender stages appear to finish together.
++- **Projects.** Save with version conflict detection, *Saved / Unsaved changes* status, reopen and delete.
++- **Diagnostics and errors.** The System panel distinguishes a configured key from a verified connection; error codes become clear messages.
++- **Accessibility and responsiveness.** An axe-core audit (WCAG 2 A and AA, including colour contrast) found no violations on desktop and mobile views, and the layout works at phone width.
++- **Weakness:** long requests give no intermediate feedback beyond the stage marker.
++
++## 8. Backend Review
++
++- **Structure.** Clear layers: routes, schemas, agents, services, domain models, planner, validation, scene compiler, storage. Routes are thin.
++- **Separation of concerns.** Domain logic is free of HTTP and SDK details; the Claude client and the Blender services are the only external boundaries.
++- **Asynchronous operation.** Claude calls are `async`. Planning, builds, renders and project operations are synchronous functions run in FastAPI's thread pool, and builds and renders block a worker thread for their duration.
++- **Error handling.** One error envelope, stable codes, request IDs, and production-safe messages.
++- **Weakness:** process-local state (engine choice, verification cache, project lock) means the backend must run as a single process.
++
++## 9. Code Quality
++
++- **Readability and naming.** Descriptive names and docstrings explaining *why*, not only what.
++- **Modularity.** Small focused modules; geometry, planning, validation and compilation are pure functions over Pydantic models.
++- **Typing.** Pydantic models throughout the backend; TypeScript with strict type checking in the frontend.
++- **Lint.** Ruff runs clean in CI, with a pinned configuration.
++- **Duplication.** Low. One notable exception, deliberate: Blender-side validation re-implements checks the backend already makes, because the Blender process must not trust its input.
++- **Documentation.** Design documents in `docs/`, plus tests that fail if the README's API table, `.env.example` or documented paths drift from the code.
++
++## 10. Reliability
++
++```
++Frontend -> Backend -> Claude API -> validation -> planner -> scene compiler -> Blender -> render
++```
++
++| Point | Failure | Handling |
++| --- | --- | --- |
++| Frontend -> backend | Backend down | System panel shows *Unreachable*; requests time out with a message |
++| Claude API | Key, credit, model, rate limit, network | Classified, logged and explained; no retry for account problems |
++| Claude output | Invalid design | One corrective retry, then a clear failure listing the problems |
++| Planner | Impossible layout | `planning_failed` with the reason |
++| Blender | Missing, crashes, times out | Distinct errors; logs kept in the job folder |
++| Rendering | Slow engine, blank image | Engine chosen by measurement; blank renders rejected |
++| Storage | Concurrent saves, damaged file | Version conflict (409); damaged files skipped in the list |
++
++The weakest point is **long synchronous requests**: a closed browser tab does not stop a running render, and a slow CPU render occupies a worker thread throughout.
++
++## 11. Security Review
++
++Appropriate for local single-user use: the key stays on the backend and out of logs, AI output never becomes code, subprocesses use argument lists, and IDs are validated before filesystem access. The backend has **no authentication and no rate limiting**, and Python dependencies are not locked, so it is not ready for public exposure. See [Security](SECURITY.md) for the threat model and checklist.
++
++## 12. Testing Review
++
++Results on the development machine at this release:
++
++| Suite | Result |
++| --- | --- |
++| Backend (pytest) | 1,233 passed; Blender, end-to-end and live tests skip unless configured |
++| Frontend (Vitest) | 35 passed |
++| Real Blender (Blender 4.2.0 and 5.2.2) | All passed |
++| End-to-end definition of done (real Blender, scripted Claude) | Passed |
++| Accessibility audit (`tools/visual-check`) | No violations |
++
++**Covered well:** models and validation rules; the planner (including 300 random intents); scene geometry; Claude error handling with a mocked transport; agents with scripted replies; API endpoints; project storage and trust boundaries; documentation consistency.
++
++**Gaps:**
++- live Claude behaviour (opt-in only);
++- EEVEE on a GPU;
++- a desktop Blender binary on Windows or macOS (testing used Linux and the `bpy` module);
++- concurrent requests;
++- browser end-to-end tests of the real UI against a real backend;
++- a coverage percentage, which is not measured.
++
++## 13. Performance
++
++| Operation | Observed (development machine, CPU only) | Bottleneck |
++| --- | --- | --- |
++| Planning | Fractions of a second | Spine-position search |
++| Blender build | Under a second inside Blender, a few seconds with start-up | Blender start-up |
++| Preview render (Cycles) | 20 to 50 seconds | CPU path tracing; interiors slower |
++| High-quality render | Many minutes on CPU | Samples x pixels |
++| Interpretation | Not measured live | Claude latency and output length |
++
++Repeated Claude calls are limited by the attempt cap, and cached system prompts reduce the cost of corrections.
++
++## 14. Scalability
++
++| Scenario | Current suitability |
++| --- | --- |
++| Local single user | **Suitable**: the intended use |
++| Several users on one machine or network | **Not suitable**: no authentication, global projects, no rate limiting |
++| Cloud deployment | **Not suitable as is**: needs authentication, a queue, sandboxed workers and shared storage |
++| Concurrent Blender jobs | **Possible but unbounded**: each request starts its own process, with no limit |
++
++## 15. Strengths
++
++- A clean, defensible AI boundary: Claude interprets language; deterministic code does geometry; Blender receives only data.
++- Review before build, and changes that preserve the existing arrangement and verify their effect.
++- Deep, layered testing, including real Blender on two versions and an end-to-end test of the definition of done.
++- Honest diagnostics and error messages, distinguishing a configured key from a working one.
++- Documentation guarded by tests.
++
++## 16. Weaknesses / Limitations
++
++- Rectangular plans with a central hall only.
++- Long synchronous requests; no queue, progress stream or cancellation.
++- No authentication or rate limiting; projects are global.
++- Single-process assumptions (in-memory caches, a thread lock for project saves).
++- Generated files are never cleaned up.
++- No Python lockfile or dependency scanning.
++- Live Claude quality is unmeasured; scripted tests prove plumbing, not design quality.
++- Simplified 3D details: no stair balustrades, closed doors, no attic or furniture.
++
++## 17. Recommended Improvements
++
++### High priority
++
++1. Run the live Claude tests and promote the release to 1.0.0.
++2. Move builds and renders to background jobs with a status endpoint, concurrency limits and cancellation.
++3. Lock Python dependencies and add `pip-audit`, `npm audit` or Dependabot to CI.
++
++### Medium priority
++
++4. Stream progress to the frontend (for example server-sent events) for builds and renders.
++5. Add retention and cleanup for `output/jobs/`.
++6. Add browser end-to-end tests against a running backend.
++7. Measure interpretation quality on a fixed set of briefs.
++
++### Low priority
++
++8. Non-rectangular footprints (L-shapes, wings).
++9. Stair balustrades, open doors, an attic, furniture.
++10. Incremental Blender updates for small changes.
++
++## 18. Development Roadmap
++
++These are **recommendations, not commitments**.
++
++- **Version 1.x:** live verification and 1.0.0; background jobs with progress; dependency locking and scanning; output cleanup.
++- **Version 2.x:** authentication and per-user projects; a database repository; sandboxed Blender workers; rate limiting; deployment behind HTTPS.
++- **Long term:** non-rectangular plans and multi-wing buildings; interiors; export to formats used by architects (for example IFC); quality evaluation of AI interpretations.
++
++## 19. Portfolio Value
++
++The project demonstrates:
++
++- **AI integration done carefully:** structured outputs, schema preparation, validation loops, error classification, cost control and diagnostics.
++- **Backend engineering:** a layered FastAPI service with typed models, a consistent error contract and configuration.
++- **Frontend engineering:** a typed React interface with a clear review workflow, accessibility verified by audit.
++- **Algorithmic work:** a deterministic floor planner with a cost-based search, and layout anchoring for changes.
++- **3D automation:** procedural geometry, closed roof meshes, procedural materials, fitted cameras and lighting in Blender, driven by data.
++- **Software architecture:** clear boundaries between AI, domain logic and external processes.
++- **Security awareness:** secret handling, a data-only execution boundary, and validated IDs and paths.
++- **Testing discipline:** unit, API, real-Blender and end-to-end tests, plus documentation tests.
++
++## 20. Final Assessment
++
++AI Architect Agent is a coherent, carefully engineered system whose most important design decision, keeping AI on the language side of a validated data boundary, is sound and consistently applied. For its intended use, a single user on their own machine, it is complete and reliable, with unusually thorough testing for a project of this kind.
++
++Its limits are those of a local tool: synchronous long-running work, no authentication, single-process storage and simplified architecture. Running the live Claude tests, moving Blender work to background jobs and locking dependencies would be the right next steps.
+diff --git a/README.md b/README.md
+index 78d1635..a3ea9f8 100644
+--- a/README.md
++++ b/README.md
+@@ -20,6 +20,17 @@ Describe a building in plain English and get back a structured architectural spe
+ 
+ *The app reviewing a saved design on a laptop and a phone, captured with [the visual check](tools/visual-check). Screenshots were taken where Google Fonts is blocked, so they show the fallback typeface rather than Archivo.*
+ 
++## Documentation
++
++| Document | Contents |
++| --- | --- |
++| [Installation Guide](INSTRUCTION.md) | Installing, configuring, running and troubleshooting |
++| [Architecture](ARCHITECTURE.md) | How the system works internally, with diagrams |
++| [API Documentation](API_DOCUMENTATION.md) | Every endpoint, model and error code |
++| [Security](SECURITY.md) | Security model, threat model and checklist |
++| [Project Review](PROJECT_REVIEW.md) | A critical evaluation: strengths, limitations, roadmap |
++| [docs/](docs/architecture.md) | Detailed design notes for each subsystem |
++
+ ## How it works
+ 
+ The core idea: **Claude decides *what* should exist; deterministic code decides *where* and *how*.** The AI never writes Blender code. It produces structured data that is validated before any geometry is created.
+@@ -55,8 +66,8 @@ Modifications ("make the living room 1 m wider") follow the same rule: Claude re
+ ### Prerequisites
+ 
+ - Python 3.11 or newer
+-- Node.js 20 or newer
+-- Blender 4.2 LTS or newer (only needed from Phase 5)
++- Node.js 22 LTS (the version CI uses; the frontend's Vite 8 needs a recent Node.js)
++- Blender 4.2 LTS or newer (needed to build and render)
+ 
+ ### 1. Configure environment
+ 
+diff --git a/SECURITY.md b/SECURITY.md
+new file mode 100644
+index 0000000..29a4fb7
+--- /dev/null
++++ b/SECURITY.md
+@@ -0,0 +1,266 @@
++# AI Architect Agent - Security
++
++This document describes the security model of AI Architect Agent as implemented, its known weaknesses, and what would need to change before any public deployment. It complements [Architecture](ARCHITECTURE.md), [API Documentation](API_DOCUMENTATION.md) and the [Installation Guide](INSTRUCTION.md).
++
++---
++
++## 1. Security Overview
++
++AI Architect Agent is designed as a **single-user application running on the user's own machine**: the backend binds to `127.0.0.1`, the frontend runs on the Vite development server, and generated files are written to the local `output/` folder.
++
++Within that context the main assets are:
++
++- **the Anthropic API key**, which can spend money;
++- **the machine itself**, because the backend starts Blender processes and writes files;
++- **the user's saved designs**.
++
++The main untrusted inputs are building briefs and change requests (which go to Claude), Claude's replies, and anything sent to the HTTP API.
++
++The central design choice is that **AI output never becomes executable code**. Claude returns structured data, which is validated three times (schema, Pydantic, rules) and then compiled by deterministic code into a data file for Blender, which validates it again.
++
++## 2. API Key Security
++
++`ANTHROPIC_API_KEY` must be handled as follows. The current code supports each rule:
++
++| Rule | How the code supports it |
++| --- | --- |
++| Backend only | Read by `Settings` on the backend; no endpoint returns it; the frontend never needs it |
++| Stored in `.env` | `.env` in the project root, ignored by Git |
++| Never in the frontend | The browser calls the backend, which calls Anthropic |
++| Never in Git | `.gitignore` excludes `.env` and `.env.*` (but keeps `.env.example`, which has an empty key) |
++| Never in logs | Held as a Pydantic `SecretStr`; Claude failures are logged with status, type, request ID and message only; a test asserts the key is absent from the log |
++| Never in screenshots | Users' responsibility: the System panel only says *Configured on the server* |
++| Rotate if exposed | If a key ever appears in a commit, chat, screenshot or log, revoke it in the Anthropic console and create a new one; deleting the text is not enough |
++
++The diagnostic script prints only the key's length and whether it starts with `sk-ant-`.
++
++## 3. Environment Variables
++
++All configuration is typed and bounded by `Settings` (`backend/app/core/config.py`) and documented in `.env.example`. Security-relevant settings:
++
++| Variable | Security effect |
++| --- | --- |
++| `ANTHROPIC_API_KEY` | Secret; see above |
++| `APP_ENV` | `production` stops Anthropic's error text (`reason` and related fields) being sent to the browser |
++| `CORS_ORIGINS` | Which browser origins may call the API (default: the local Vite server only) |
++| `MAX_REQUEST_BYTES` | Request body limit (default 1 MB) |
++| `BLENDER_EXECUTABLE` | The program the backend runs; trusted configuration, never taken from requests |
++| `BLENDER_TIMEOUT_SECONDS`, `RENDER_TIMEOUT_SECONDS` | Bound how long a Blender process may run |
++| `JOBS_DIR`, `PROJECTS_DIR` | Where files are written; blank values fall back to the defaults, never the current directory |
++
++## 4. .gitignore
++
++Verified in the repository's `.gitignore`:
++
++| Pattern | Status |
++| --- | --- |
++| `.env` | Ignored |
++| `.env.*` | Ignored |
++| `!.env.example` | Explicitly kept, so the example stays in the repository |
++| `output/` | Ignored (builds, renders, projects) |
++| `.venv/`, `node_modules/`, caches, `frontend/dist/` | Ignored |
++| `*.blend1` | Ignored (Blender backup files) |
++| `.vscode/`, `.idea/` | Ignored |
++
++There are no patterns for private key or certificate files (`*.pem`, `*.key`). The project uses none, so this is low risk; adding them is a reasonable precaution.
++
++## 5. Secret Exposure Check
++
++The tracked files were searched for Anthropic keys, AWS access keys, GitHub tokens, private key blocks and hard-coded passwords.
++
++- **No real credentials were found.**
++- The only matches are **deliberately fake placeholder keys in tests**, used to prove the key never leaks: in `backend/tests/test_health.py`, `backend/tests/test_config.py` and `backend/tests/e2e/test_definition_of_done.py`. They are not valid keys.
++- No `.env` file is tracked.
++
++Each developer's own `.env` is outside Git and was not examined. Run `git status` before committing: `.env` must never appear in it.
++
++## 6. Anthropic API Security
++
++- **Backend-only requests.** All calls go through `AnthropicStructuredClient` (`backend/app/services/claude_service.py`).
++- **Error sanitisation.** Every SDK error becomes a fixed `CLAUDE_*` code and a fixed message. Anthropic's own text is attached as `reason` only outside production. Anthropic's error messages do not contain the key.
++- **Logging.** Failures log the HTTP status, Anthropic error type, request ID, model and message: enough to diagnose, nothing secret.
++- **Cost control.** Each brief or change uses at most `ARCHITECT_MAX_ATTEMPTS` calls (default 2), replies are capped by `ANTHROPIC_MAX_TOKENS`, and the health check is cached for 10 minutes. **Rate limiting is not currently implemented in the backend**; only Anthropic's own account limits apply.
++
++## 7. Frontend Security
++
++| Area | Finding |
++| --- | --- |
++| Secrets | None in the frontend; it only knows whether a key is configured |
++| API communication | Same-origin `/api` requests through the Vite proxy; no credentials or tokens |
++| User input | Sent as JSON; validated by the backend (length limits, types) |
++| Rendering of text | React escapes all text; the code does not use `dangerouslySetInnerHTML` |
++| Generated SVG floor plans | Shown through an `<img>` data URL, so the browser treats them as images and cannot run scripts inside them |
++| Error messages | Codes are translated to fixed messages; Anthropic's reason appears only in development |
++
++## 8. Backend Security
++
++| Control | Implementation |
++| --- | --- |
++| Input validation | Pydantic models with `extra="forbid"`, string length limits, numeric bounds and enums on every request body |
++| Body size | Middleware rejects bodies over `MAX_REQUEST_BYTES` with `413` before parsing |
++| Request IDs | Accepted from `X-Request-ID` only if alphanumeric and at most 64 characters; otherwise generated |
++| Exception handling | Expected failures return the error envelope; unexpected ones return `500 internal_error` with no details, and the traceback goes only to the log |
++| CORS | Restricted origins, listed methods and headers, no credentials (see [section 14](#14-cors)) |
++| File access | Every ID used in a path is checked against a strict pattern first (see [section 12](#12-file-security)) |
++| Subprocesses | Argument lists, no shell (see [section 9](#9-blendersubprocess-security)) |
++
++## 9. Blender/Subprocess Security
++
++This is the most security-sensitive part of the project, because the backend starts external programs.
++
++**Existing protections**
++
++| Risk | Protection |
++| --- | --- |
++| Command injection | `subprocess.run` is always given an **argument list**; `shell=True` is never used. The only arguments are the configured executable, the project's own script path and paths built from server-generated IDs |
++| Untrusted executable | `BLENDER_EXECUTABLE` comes only from server configuration, never from a request |
++| Arbitrary code execution through AI | Claude never produces code. The scene sent to Blender is **data** (boxes, meshes, materials, cameras, lights), and `blender/scripts/scene_validation.py` re-validates it: allowed element kinds, name patterns, finite and bounded numbers, valid mesh indices, size limits. A test sends a tampered scene to real Blender and checks it is refused |
++| User or add-on scripts | Blender application mode runs with `--background --factory-startup`, which skips the user's start-up file and add-ons |
++| Render options | `render_runner.py` checks every option against its own whitelists and only accepts cameras that exist in the file; the render ID is checked against a strict hexadecimal pattern **before** it is used as a file name |
++| Runaway processes | Build and render timeouts (`BLENDER_TIMEOUT_SECONDS`, `RENDER_TIMEOUT_SECONDS`) |
++
++**Weaknesses**
++
++- Blender runs with the **same user permissions as the backend**. There is no sandbox, container or resource limit beyond the timeout.
++- A Blender process started by a request keeps running until it finishes or times out, even if the client disconnects.
++- There is **no limit on how many builds or renders run at once**, other than the thread pool.
++
++## 10. Prompt Injection
++
++Building briefs and change requests are untrusted text sent to Claude. Someone could write "ignore your instructions and..." into a brief.
++
++What limits the impact:
++
++- **Separation.** System instructions are sent as the system prompt; the brief is wrapped in tags (`<building_request>`, `<change_request>`), and tag-like text inside it is stripped. The modification prompt instructs Claude to treat the request purely as a description of a change and to ignore instructions inside it.
++- **Constrained output.** Replies must match a JSON Schema (structured outputs), so Claude cannot answer with free text, code or commands.
++- **Validation.** Every reply is parsed and validated by Pydantic and by the validation rules; invalid output is rejected.
++- **No capabilities to abuse.** Claude has no tools, cannot read files, cannot browse and cannot run anything. The worst outcome of a successful injection is an odd design, a refusal or a wasted request.
++
++**Residual risk:** an injected brief could produce a strange but valid design, or consume API credit.
++
++## 11. AI Output Validation
++
++```
++Claude reply
++  -> structured output (constrained to the JSON Schema)
++  -> json.loads
++  -> Pydantic model (DesignIntent or ChangeSet): types, bounds, enums, unknown fields rejected
++  -> rules: intent validation; for changes, IDs must exist and materials must suit the surface
++  -> deterministic planner and BuildingSpecification validation
++  -> scene compiler -> scene.json -> re-validated inside Blender
++```
++
++Claude's output is never trusted on its own: a reply that fails any step is sent back once with the specific problems, and then rejected.
++
++## 12. File Security
++
++| Item | Protection |
++| --- | --- |
++| Job IDs, render IDs, project IDs | Generated by the server (`uuid4().hex`) and checked against a 32-character lowercase hexadecimal pattern before touching the filesystem; anything else is a 404 |
++| Example IDs | Slug pattern only, resolved inside the examples folder |
++| Saved projects | The client sends only IDs; the server derives every path and URL itself. Client-supplied path, URL or report fields are rejected (`extra="forbid"`) |
++| Writes | Project files are written to a temporary file and renamed into place |
++| Downloads | `.blend` and `.png` files are served only from validated job folders |
++| Cleanup | **Not currently implemented**: `output/jobs/` and `output/projects/` grow until cleaned manually |
++
++## 13. API Security
++
++**The current backend API does not implement user authentication.** Any program that can reach the backend's address can interpret briefs (spending API credit), start Blender builds and renders, and read, overwrite or delete saved projects.
++
++On `127.0.0.1` this means any program running on the same machine, which is acceptable for a personal development tool. **It is not acceptable on a shared network or the internet.**
++
++## 14. CORS
++
++Configured in `backend/app/main.py`:
++
++| Setting | Value |
++| --- | --- |
++| Allowed origins | `CORS_ORIGINS`, default `http://localhost:5173` and `http://127.0.0.1:5173` |
++| Allowed methods | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
++| Allowed headers | `Content-Type`, `X-Request-ID` |
++| Credentials | Not allowed |
++
++CORS only controls which *web pages* may call the API from a browser. It does not stop other programs on the machine from calling it, and it is no substitute for authentication.
++
++## 15. Rate Limiting
++
++**Rate limiting is not currently implemented.** Repeated requests could spend Anthropic credit or start many Blender processes. Before any shared or public deployment, add per-client limits, especially on `/api/designs/interpret`, `/api/designs/modify`, `/api/designs/build` and the render endpoint.
++
++## 16. Logging Security
++
++| Logged (safe) | Never logged |
++| --- | --- |
++| Model name, SDK version, whether a key is set | The API key or any part of it |
++| HTTP status, Anthropic error type and message, request IDs | Other secrets or the full environment |
++| Token usage per request | |
++| Build and render IDs, timings, object counts | |
++| Tracebacks of unexpected errors (server log only) | |
++
++Logs go to the backend's console. Briefs are not logged by the service layer, but treat logs as potentially containing design details.
++
++## 17. Dependency Security
++
++- **Python:** dependencies are bounded by version ranges in `requirements.txt` and `requirements-dev.txt`, but **there is no lockfile**, so installs on different days can resolve to different versions. Recommended: a lockfile (for example with `pip-tools` or `uv`) and `pip-audit`.
++- **Frontend:** `frontend/package-lock.json` pins exact versions. Run `npm audit` regularly.
++- **CI** (`.github/workflows/ci.yml`) runs lint and tests but **no vulnerability scanning**. Recommended: Dependabot or an audit step.
++- **Blender:** the user's installation; keep it updated.
++
++## 18. Threat Model
++
++| Threat | Risk (local use) | Current protection | Recommendation |
++| --- | --- | --- | --- |
++| API key exposure in Git | Medium | `.env` ignored; no secrets tracked; `SecretStr`; key never returned or logged | Keep it; add a pre-commit secret scanner |
++| API key exposure by the user (screenshots, chats) | Medium | Key never displayed by the app | Rotate any exposed key immediately |
++| Prompt injection | Low | Tags, system prompt, schema-constrained output, validation, no tools | Keep Claude tool-free |
++| Malicious API input | Low | Pydantic validation, size limits, unknown fields rejected | Keep strict models |
++| Command injection | Low | Argument lists, no shell, executable from configuration only | Keep it; never accept executables or paths from requests |
++| Code execution through Blender | Low | Data-only scene, re-validated in Blender; `--factory-startup` | Run Blender in a sandbox for any shared use |
++| Path traversal | Low | Strict ID patterns before any filesystem access; server-derived paths | Keep it |
++| Excessive API usage | Medium | Attempt and token caps; cached health check | Rate limiting; spending limits in the Anthropic console |
++| Unauthorised API access | Low locally, **Critical if exposed** | Localhost binding by default | Authentication before any non-local deployment |
++| Denial of service (many builds or renders) | Low locally, High if exposed | Timeouts only | Job queue with concurrency limits |
++| Dependency vulnerabilities | Medium | Version ranges; npm lockfile | Python lockfile, `pip-audit`, `npm audit`, Dependabot |
++| Disk exhaustion from generated files | Low | None | Retention or cleanup for `output/` |
++
++## 19. Local Deployment vs Public Deployment
++
++As shipped, the application is **reasonably safe on `127.0.0.1` for one user**. It is **not ready for public internet exposure**. Before that, at minimum:
++
++1. Add authentication and per-user authorisation (projects are currently global).
++2. Add rate limiting and spending limits.
++3. Run builds and renders through a job queue with concurrency limits, in sandboxed workers.
++4. Serve over HTTPS behind a reverse proxy; set `APP_ENV=production` and tighten `CORS_ORIGINS`.
++5. Replace the in-process caches and the process-local lock with shared infrastructure.
++6. Add retention and cleanup for generated files.
++7. Pin and scan dependencies.
++
++## 20. Security Checklist
++
++Items marked [x] were verified in the repository.
++
++- [x] `.env` excluded from Git, and `.env.example` kept with an empty key
++- [x] No real secrets in tracked files (test placeholders only)
++- [x] API key used only by the backend, stored as `SecretStr`, never returned or logged
++- [x] Request bodies validated by Pydantic, unknown fields rejected
++- [x] Request size limited
++- [x] Claude output validated (schema, Pydantic, rules) and never executed
++- [x] Blender receives data only and re-validates it
++- [x] Subprocess arguments passed as lists, no shell
++- [x] IDs validated before filesystem access; paths derived by the server
++- [x] CORS restricted to the local frontend, without credentials
++- [x] Production mode hides Anthropic's error text from the browser
++- [ ] Exposed keys rotated (each user's responsibility)
++- [ ] Rate limiting configured
++- [ ] Authentication added before any non-local deployment
++- [ ] Python dependencies locked and scanned
++- [ ] Generated files cleaned up automatically
++- [ ] Blender sandboxed for shared use
++
++## 21. Reporting a Vulnerability
++
++Please do **not** report security problems in public issues.
++
++- If the repository has **GitHub private vulnerability reporting** enabled, use **Security -> Report a vulnerability** on the repository page.
++- Otherwise, contact the repository owner privately through their GitHub profile.
++
++Include what is affected, how to reproduce it, and the impact. Never include real API keys or other secrets in a report; if one was exposed, revoke it first.
+diff --git a/backend/tests/test_docs.py b/backend/tests/test_docs.py
+index fb55d86..22ce912 100644
+--- a/backend/tests/test_docs.py
++++ b/backend/tests/test_docs.py
+@@ -10,7 +10,8 @@ from app.main import create_app
+ 
+ README = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+ ENV_EXAMPLE = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+-DOCS = {path: path.read_text(encoding="utf-8") for path in [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").glob("*.md"))]}
++ROOT_DOCS = ["README.md", "INSTRUCTION.md", "PROJECT_REVIEW.md", "API_DOCUMENTATION.md", "ARCHITECTURE.md", "SECURITY.md", "CHANGELOG.md"]
++DOCS = {path: path.read_text(encoding="utf-8") for path in [*(REPO_ROOT / name for name in ROOT_DOCS), *sorted((REPO_ROOT / "docs").glob("*.md"))]}
+ 
+ 
+ def real_routes() -> set[tuple[str, str]]:
+-- 
+2.43.0
+
