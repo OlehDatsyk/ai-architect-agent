@@ -1,0 +1,33 @@
+[project]
+name = "ai-architect-agent-backend"
+version = "1.0.0rc1"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -m 'not live'"
+asyncio_mode = "auto"
+markers = [
+    "live: calls the real Anthropic API (run with RUN_LIVE_CLAUDE_TESTS=1)",
+    "blender: runs real Blender (set BLENDER_EXECUTABLE)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, import order, bugbear, comprehensions, unused noqa
+select = ["F", "E", "W", "I", "B", "C4", "RUF100"]
+# Long lines are allowed: messages and tables are clearer kept on one line.
+# zip() without strict= is deliberate: the code often pairs a list with its own tail.
+ignore = ["E501", "B905"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests", "scripts"]
+
+[tool.ruff.lint.per-file-ignores]
+# Blender scripts: their import order is load-bearing (they extend sys.path before importing
+# their siblings, and bmesh only exists after bpy is imported), so no import sorting there.
+"../blender/scripts/*.py" = ["E402", "I", "RUF100"]

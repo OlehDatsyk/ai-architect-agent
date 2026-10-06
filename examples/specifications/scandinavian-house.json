@@ -1,0 +1,761 @@
+{
+  "schema_version": "1.0",
+  "project": {
+    "id": "example-scandinavian-house",
+    "name": "Scandinavian Timber House",
+    "description": "Minimalist two-storey house in timber cladding with an open-plan ground floor and four bedrooms upstairs.",
+    "units": "metres",
+    "style": "scandinavian",
+    "created_at": "2026-10-02T00:00:00Z"
+  },
+  "building": {
+    "building_type": "detached_house",
+    "width": 10.8,
+    "depth": 8.4,
+    "floors": 2,
+    "floor_height": 2.8,
+    "foundation_height": 0.15,
+    "wall_thickness": 0.3,
+    "interior_wall_thickness": 0.1,
+    "slab_thickness": 0.25
+  },
+  "floors": [
+    {
+      "level": 0,
+      "name": "Ground floor",
+      "elevation": 0.0,
+      "height": 2.8
+    },
+    {
+      "level": 1,
+      "name": "First floor",
+      "elevation": 2.8,
+      "height": 2.6
+    }
+  ],
+  "rooms": [
+    {
+      "id": "hall",
+      "name": "Entrance Hall",
+      "type": "entrance",
+      "floor": 0,
+      "x": 0.0,
+      "y": 0.0,
+      "width": 2.8,
+      "depth": 4.2,
+      "height": null,
+      "wall_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "wood_flooring",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 11.76
+    },
+    {
+      "id": "wc",
+      "name": "WC",
+      "type": "wc",
+      "floor": 0,
+      "x": 0.0,
+      "y": 4.2,
+      "width": 2.8,
+      "depth": 1.6,
+      "height": null,
+      "wall_material": {
+        "id": "tile",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "tile",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 4.48
+    },
+    {
+      "id": "utility",
+      "name": "Utility Room",
+      "type": "utility",
+      "floor": 0,
+      "x": 0.0,
+      "y": 5.8,
+      "width": 2.8,
+      "depth": 2.6,
+      "height": null,
+      "wall_material": {
+        "id": "tile",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "tile",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 7.28
+    },
+    {
+      "id": "open_plan",
+      "name": "Kitchen, Dining and Living",
+      "type": "open_plan_living",
+      "floor": 0,
+      "x": 2.8,
+      "y": 0.0,
+      "width": 8.0,
+      "depth": 8.4,
+      "height": null,
+      "wall_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "wood_flooring",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 67.2
+    },
+    {
+      "id": "landing",
+      "name": "Landing",
+      "type": "landing",
+      "floor": 1,
+      "x": 0.0,
+      "y": 0.0,
+      "width": 2.8,
+      "depth": 5.8,
+      "height": null,
+      "wall_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "carpet",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 16.24
+    },
+    {
+      "id": "bathroom",
+      "name": "Bathroom",
+      "type": "bathroom",
+      "floor": 1,
+      "x": 0.0,
+      "y": 5.8,
+      "width": 2.8,
+      "depth": 2.6,
+      "height": null,
+      "wall_material": {
+        "id": "tile",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "tile",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 7.28
+    },
+    {
+      "id": "bedroom_1",
+      "name": "Main Bedroom",
+      "type": "bedroom",
+      "floor": 1,
+      "x": 2.8,
+      "y": 0.0,
+      "width": 4.0,
+      "depth": 4.2,
+      "height": null,
+      "wall_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "carpet",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 16.8
+    },
+    {
+      "id": "bedroom_2",
+      "name": "Bedroom 2",
+      "type": "bedroom",
+      "floor": 1,
+      "x": 6.8,
+      "y": 0.0,
+      "width": 4.0,
+      "depth": 4.2,
+      "height": null,
+      "wall_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "carpet",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 16.8
+    },
+    {
+      "id": "corridor",
+      "name": "Upper Corridor",
+      "type": "hallway",
+      "floor": 1,
+      "x": 2.8,
+      "y": 4.2,
+      "width": 8.0,
+      "depth": 1.2,
+      "height": null,
+      "wall_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "wood_flooring",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 9.6
+    },
+    {
+      "id": "bedroom_3",
+      "name": "Bedroom 3",
+      "type": "bedroom",
+      "floor": 1,
+      "x": 2.8,
+      "y": 5.4,
+      "width": 4.0,
+      "depth": 3.0,
+      "height": null,
+      "wall_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "carpet",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 12.0
+    },
+    {
+      "id": "bedroom_4",
+      "name": "Bedroom 4",
+      "type": "bedroom",
+      "floor": 1,
+      "x": 6.8,
+      "y": 5.4,
+      "width": 4.0,
+      "depth": 3.0,
+      "height": null,
+      "wall_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "floor_material": {
+        "id": "carpet",
+        "colour": null
+      },
+      "ceiling_material": {
+        "id": "painted_plaster",
+        "colour": null
+      },
+      "area": 12.0
+    }
+  ],
+  "doors": [
+    {
+      "id": "door_front",
+      "type": "front",
+      "floor": 0,
+      "position": {
+        "x": 1.9,
+        "y": 0.0
+      },
+      "rotation": 0,
+      "width": 1.0,
+      "height": 2.1,
+      "connects_room_a": "hall",
+      "connects_room_b": null,
+      "is_external": true,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "door_patio",
+      "type": "patio_sliding",
+      "floor": 0,
+      "position": {
+        "x": 8.6,
+        "y": 8.4
+      },
+      "rotation": 180,
+      "width": 2.4,
+      "height": 2.1,
+      "connects_room_a": "open_plan",
+      "connects_room_b": null,
+      "is_external": true,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "door_utility_rear",
+      "type": "rear",
+      "floor": 0,
+      "position": {
+        "x": 1.4,
+        "y": 8.4
+      },
+      "rotation": 180,
+      "width": 0.9,
+      "height": 2.1,
+      "connects_room_a": "utility",
+      "connects_room_b": null,
+      "is_external": true,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "opening_hall_living",
+      "type": "opening",
+      "floor": 0,
+      "position": {
+        "x": 2.8,
+        "y": 2.1
+      },
+      "rotation": 90,
+      "width": 2.0,
+      "height": 2.1,
+      "connects_room_a": "hall",
+      "connects_room_b": "open_plan",
+      "is_external": false,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "door_hall_wc",
+      "type": "internal",
+      "floor": 0,
+      "position": {
+        "x": 2.0,
+        "y": 4.2
+      },
+      "rotation": 0,
+      "width": 0.75,
+      "height": 2.1,
+      "connects_room_a": "hall",
+      "connects_room_b": "wc",
+      "is_external": false,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "door_utility_living",
+      "type": "internal",
+      "floor": 0,
+      "position": {
+        "x": 2.8,
+        "y": 7.1
+      },
+      "rotation": 90,
+      "width": 0.9,
+      "height": 2.1,
+      "connects_room_a": "utility",
+      "connects_room_b": "open_plan",
+      "is_external": false,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "door_landing_bathroom",
+      "type": "internal",
+      "floor": 1,
+      "position": {
+        "x": 1.4,
+        "y": 5.8
+      },
+      "rotation": 0,
+      "width": 0.8,
+      "height": 2.1,
+      "connects_room_a": "landing",
+      "connects_room_b": "bathroom",
+      "is_external": false,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "door_landing_bedroom_1",
+      "type": "internal",
+      "floor": 1,
+      "position": {
+        "x": 2.8,
+        "y": 1.5
+      },
+      "rotation": 90,
+      "width": 0.9,
+      "height": 2.1,
+      "connects_room_a": "landing",
+      "connects_room_b": "bedroom_1",
+      "is_external": false,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "opening_landing_corridor",
+      "type": "opening",
+      "floor": 1,
+      "position": {
+        "x": 2.8,
+        "y": 4.800000000000001
+      },
+      "rotation": 90,
+      "width": 1.0,
+      "height": 2.1,
+      "connects_room_a": "landing",
+      "connects_room_b": "corridor",
+      "is_external": false,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "door_corridor_bedroom_2",
+      "type": "internal",
+      "floor": 1,
+      "position": {
+        "x": 8.8,
+        "y": 4.2
+      },
+      "rotation": 0,
+      "width": 0.9,
+      "height": 2.1,
+      "connects_room_a": "corridor",
+      "connects_room_b": "bedroom_2",
+      "is_external": false,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "door_corridor_bedroom_3",
+      "type": "internal",
+      "floor": 1,
+      "position": {
+        "x": 4.8,
+        "y": 5.4
+      },
+      "rotation": 0,
+      "width": 0.9,
+      "height": 2.1,
+      "connects_room_a": "corridor",
+      "connects_room_b": "bedroom_3",
+      "is_external": false,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    {
+      "id": "door_corridor_bedroom_4",
+      "type": "internal",
+      "floor": 1,
+      "position": {
+        "x": 8.8,
+        "y": 5.4
+      },
+      "rotation": 0,
+      "width": 0.9,
+      "height": 2.1,
+      "connects_room_a": "corridor",
+      "connects_room_b": "bedroom_4",
+      "is_external": false,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    }
+  ],
+  "windows": [
+    {
+      "id": "win_living_front_1",
+      "style": "casement",
+      "room": "open_plan",
+      "wall": "front",
+      "offset": 5.0,
+      "width": 2.0,
+      "height": 1.6,
+      "sill_height": 0.6
+    },
+    {
+      "id": "win_living_front_2",
+      "style": "casement",
+      "room": "open_plan",
+      "wall": "front",
+      "offset": 8.8,
+      "width": 2.0,
+      "height": 1.6,
+      "sill_height": 0.6
+    },
+    {
+      "id": "win_living_rear",
+      "style": "floor_to_ceiling",
+      "room": "open_plan",
+      "wall": "rear",
+      "offset": 5.0,
+      "width": 2.4,
+      "height": 2.3,
+      "sill_height": 0.0
+    },
+    {
+      "id": "win_living_side",
+      "style": "fixed",
+      "room": "open_plan",
+      "wall": "right",
+      "offset": 4.2,
+      "width": 1.6,
+      "height": 1.6,
+      "sill_height": 0.6
+    },
+    {
+      "id": "win_wc",
+      "style": "casement",
+      "room": "wc",
+      "wall": "left",
+      "offset": 5.0,
+      "width": 0.6,
+      "height": 0.7,
+      "sill_height": 1.4
+    },
+    {
+      "id": "win_utility",
+      "style": "casement",
+      "room": "utility",
+      "wall": "left",
+      "offset": 7.1,
+      "width": 0.8,
+      "height": 1.0,
+      "sill_height": 1.1
+    },
+    {
+      "id": "win_landing",
+      "style": "casement",
+      "room": "landing",
+      "wall": "front",
+      "offset": 1.9,
+      "width": 1.0,
+      "height": 1.3,
+      "sill_height": 0.9
+    },
+    {
+      "id": "win_bathroom_rear",
+      "style": "casement",
+      "room": "bathroom",
+      "wall": "rear",
+      "offset": 1.4,
+      "width": 0.8,
+      "height": 0.9,
+      "sill_height": 1.2
+    },
+    {
+      "id": "win_bedroom_1",
+      "style": "casement",
+      "room": "bedroom_1",
+      "wall": "front",
+      "offset": 4.8,
+      "width": 1.6,
+      "height": 1.2,
+      "sill_height": 0.9
+    },
+    {
+      "id": "win_bedroom_2",
+      "style": "casement",
+      "room": "bedroom_2",
+      "wall": "front",
+      "offset": 8.8,
+      "width": 1.6,
+      "height": 1.2,
+      "sill_height": 0.9
+    },
+    {
+      "id": "win_bedroom_2_side",
+      "style": "casement",
+      "room": "bedroom_2",
+      "wall": "right",
+      "offset": 2.1,
+      "width": 1.0,
+      "height": 1.2,
+      "sill_height": 0.9
+    },
+    {
+      "id": "win_bedroom_3",
+      "style": "casement",
+      "room": "bedroom_3",
+      "wall": "rear",
+      "offset": 4.8,
+      "width": 1.6,
+      "height": 1.2,
+      "sill_height": 0.9
+    },
+    {
+      "id": "win_bedroom_4",
+      "style": "casement",
+      "room": "bedroom_4",
+      "wall": "rear",
+      "offset": 8.8,
+      "width": 1.6,
+      "height": 1.2,
+      "sill_height": 0.9
+    }
+  ],
+  "stairs": [
+    {
+      "id": "stair_main",
+      "from_floor": 0,
+      "to_floor": 1,
+      "x": 0.2,
+      "y": 0.6,
+      "width": 0.9,
+      "direction": "front_to_rear",
+      "risers": 15,
+      "rise": 0.18667,
+      "run": 0.25
+    }
+  ],
+  "balconies": [],
+  "roof": {
+    "type": "gable",
+    "pitch": 45.0,
+    "overhang": 0.2,
+    "material": {
+      "id": "standing_seam_metal",
+      "colour": "#2b2d2f"
+    },
+    "ridge_direction": "x"
+  },
+  "exterior": {
+    "wall_material": {
+      "id": "timber_cladding",
+      "colour": "#3a3632"
+    },
+    "accent_material": null,
+    "trim_material": {
+      "id": "wood",
+      "colour": null
+    },
+    "window_frame_material": {
+      "id": "wood",
+      "colour": null
+    },
+    "door_material": {
+      "id": "wood",
+      "colour": null
+    }
+  },
+  "environment": {
+    "ground_material": {
+      "id": "grass",
+      "colour": null
+    },
+    "driveway": null,
+    "patio": {
+      "id": "rear_deck",
+      "x": 2.8,
+      "y": 8.4,
+      "width": 8.0,
+      "depth": 3.5,
+      "material": {
+        "id": "wood",
+        "colour": null
+      }
+    },
+    "paths": [
+      {
+        "id": "front_path",
+        "x": 1.4,
+        "y": -5.0,
+        "width": 1.0,
+        "depth": 5.0,
+        "material": {
+          "id": "gravel",
+          "colour": null
+        }
+      }
+    ],
+    "vegetation": [
+      {
+        "id": "birch_1",
+        "kind": "tree",
+        "x": 14.5,
+        "y": 2.0,
+        "size": 8.0
+      },
+      {
+        "id": "birch_2",
+        "kind": "tree",
+        "x": 15.0,
+        "y": 7.0,
+        "size": 7.0
+      }
+    ],
+    "sky": "overcast",
+    "sun": {
+      "azimuth_deg": 200.0,
+      "elevation_deg": 25.0
+    }
+  },
+  "total_height": 9.6
+}

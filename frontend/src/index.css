@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+/* Drafting-office palette: cool concrete canvas, ink linework, revision red for marks. */
+@theme {
+  --color-canvas: #e8ebea;
+  --color-surface: #f9faf9;
+  --color-ink: #1a1f24;
+  --color-muted: #59626d;
+  --color-line: #c9cfd2;
+  --color-grid: #d9dfe0;
+  --color-revision: #b23a2b;
+  --color-ok: #2e7351;
+  --color-warn: #8a5a0e;
+
+  --font-sans: "Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+html {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* A plan sheet: fine 1 m grid with a heavier 5 m grid, at an assumed 1:100-ish screen scale. */
+.plan-grid {
+  background-color: var(--color-surface);
+  background-image:
+    linear-gradient(var(--color-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-grid) 1px, transparent 1px),
+    linear-gradient(color-mix(in srgb, var(--color-grid) 45%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--color-grid) 45%, transparent) 1px, transparent 1px);
+  background-size: 80px 80px, 80px 80px, 16px 16px, 16px 16px;
+  background-position: -1px -1px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-revision);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
