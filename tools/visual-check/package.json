@@ -1,0 +1,12 @@
+{
+  "name": "ai-architect-visual-check",
+  "private": true,
+  "type": "module",
+  "description": "Screenshots and an axe-core accessibility audit of the running app, in a bundled headless Chromium.",
+  "scripts": { "check": "node visual-check.mjs" },
+  "dependencies": {
+    "@sparticuz/chromium": "^153.0.0",
+    "axe-core": "^4.14.0",
+    "puppeteer-core": "^25.12.0"
+  }
+}
